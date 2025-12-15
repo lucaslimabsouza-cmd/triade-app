@@ -22,7 +22,7 @@
     "production": {
       "distribution": "store",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://SUA_API_PUBLICA.com"
+        "EXPO_PUBLIC_API_URL": "https://triade-app.onrender.com"
       }
     }
   },
