@@ -3,9 +3,10 @@ const path = require("path");
 const xlsx = require("xlsx");
 const axios = require("axios");
 
-const FILE_NAME = "Controle imóveis Triade.xlsx";
+const FILE_NAME = "Controle imóveis Triade 1.xlsx";
 const SHEET_NAME = "Dados Imóveis";
 
+// Opcional: se existir, tenta baixar a planilha por URL
 const EXCEL_URL = process.env.EXCEL_URL;
 
 /**
@@ -32,7 +33,7 @@ function parseNumberCell(value) {
     const cleaned = value
       .replace(/\s+/g, "")
       .replace("%", "")
-      .replace(".", "")
+      .replace(/\./g, "")
       .replace(",", ".");
 
     const num = Number(cleaned);
@@ -54,12 +55,15 @@ function mapStatusCell(value) {
 }
 
 /**
- * Lê o workbook da planilha (Google Drive ou local)
+ * 🔑 Lê o workbook da planilha
+ * Prioridade:
+ * 1) URL pública (EXCEL_URL)
+ * 2) Arquivo local em /Backend/data
  */
 async function loadWorkbook() {
   if (EXCEL_URL) {
     try {
-      console.log("🌐 Lendo planilha de operações pela URL:", EXCEL_URL);
+      console.log("🌐 Lendo planilha pela URL:", EXCEL_URL);
 
       const response = await axios.get(EXCEL_URL, {
         responseType: "arraybuffer",
@@ -68,20 +72,26 @@ async function loadWorkbook() {
       return xlsx.read(response.data, { type: "buffer" });
     } catch (err) {
       console.error(
-        "💥 Erro ao baixar planilha pela URL. Usando arquivo local...",
+        "⚠️ Falha ao baixar planilha via URL. Usando arquivo local.",
         err.message || err
       );
     }
   }
 
-  const filePath = path.join(__dirname, "..", "data", FILE_NAME);
-  console.log("📄 Lendo planilha de operações localmente em:", filePath);
+  const filePath = path.resolve(
+    process.cwd(),
+    "Backend",
+    "data",
+    FILE_NAME
+  );
+
+  console.log("📄 Lendo planilha local em:", filePath);
 
   return xlsx.readFile(filePath);
 }
 
 /**
- * Lê a planilha e devolve um array de operações
+ * 📊 Lê a planilha e devolve um array de operações
  */
 async function loadOperationsFromExcel() {
   try {
@@ -105,7 +115,10 @@ async function loadOperationsFromExcel() {
         });
 
         const numero =
-          normalizedMap["numeracao"] || normalizedMap["numero"] || null;
+          normalizedMap["numeracao"] ||
+          normalizedMap["numero"] ||
+          null;
+
         const descricao =
           normalizedMap["descricaodoimovel"] ||
           normalizedMap["descricao"] ||
@@ -113,8 +126,7 @@ async function loadOperationsFromExcel() {
 
         if (!numero || !descricao) {
           console.log(
-            `⚠️ Linha ${index + 2} ignorada (sem número ou descrição)`,
-            row
+            `⚠️ Linha ${index + 2} ignorada (sem número ou descrição)`
           );
           return null;
         }
@@ -154,7 +166,6 @@ async function loadOperationsFromExcel() {
             normalizedMap["datarecebimentodavenda"] || null,
         };
 
-        // 🔗 NOVO: documentos
         const documents = {
           cartaArrematacao:
             normalizedMap["linkcartadearrematacao"] || null,

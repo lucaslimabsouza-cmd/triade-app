@@ -1,10 +1,9 @@
-const path = require("path");
+// Backend/services/notificationsExcelService.js
 const xlsx = require("xlsx");
 const axios = require("axios");
 
 const { getInvestorAmountForProject } = require("./omieCostsService");
 
-const FILE_NAME = "Controle imóveis Triade.xlsx";
 const NOTIFICATIONS_SHEET_URL =
   process.env.NOTIFICATIONS_SHEET_URL || process.env.LOGIN_SHEET_URL;
 
@@ -24,47 +23,26 @@ function normalizeKey(key) {
 }
 
 /**
- * Tenta carregar workbook:
- * 1) via URL do Drive (se existir)
- * 2) se falhar, via arquivo local em Backend/data/FILE_NAME
+ * 🔑 Carrega workbook EXCLUSIVAMENTE via URL (Drive)
  */
 async function loadWorkbook() {
-  // 1) Tenta via URL
-  if (NOTIFICATIONS_SHEET_URL) {
-    try {
-      console.log("🌐 [NOTIF] Baixando planilha em:", NOTIFICATIONS_SHEET_URL);
-
-      const response = await axios.get(NOTIFICATIONS_SHEET_URL, {
-        responseType: "arraybuffer",
-      });
-
-      const buffer = Buffer.from(response.data);
-      const workbook = xlsx.read(buffer, { type: "buffer" });
-
-      console.log("✅ [NOTIF] Planilha carregada via URL.");
-      return workbook;
-    } catch (err) {
-      console.error(
-        "💥 [NOTIF] Erro ao baixar via URL, tentando local:",
-        err.message || err
-      );
-    }
-  } else {
-    console.warn("⚠️ [NOTIF] Sem URL, tentando local.");
+  if (!NOTIFICATIONS_SHEET_URL) {
+    throw new Error(
+      "NOTIFICATIONS_SHEET_URL não definida. Configure a URL da planilha no .env / Render."
+    );
   }
 
-  // 2) Fallback: arquivo local
-  try {
-    const filePath = path.join(__dirname, "..", "data", FILE_NAME);
-    console.log("📄 [NOTIF] Lendo planilha local em:", filePath);
+  console.log("🌐 [NOTIF] Baixando planilha do Drive:", NOTIFICATIONS_SHEET_URL);
 
-    const workbook = xlsx.readFile(filePath);
-    console.log("✅ [NOTIF] Planilha local carregada.");
-    return workbook;
-  } catch (err) {
-    console.error("💥 [NOTIF] Erro ao ler planilha local:", err.message || err);
-    return null;
-  }
+  const response = await axios.get(NOTIFICATIONS_SHEET_URL, {
+    responseType: "arraybuffer",
+  });
+
+  const buffer = Buffer.from(response.data);
+  const workbook = xlsx.read(buffer, { type: "buffer" });
+
+  console.log("✅ [NOTIF] Planilha carregada via Drive.");
+  return workbook;
 }
 
 /**
@@ -72,18 +50,19 @@ async function loadWorkbook() {
  */
 function findNotificationsSheet(workbook) {
   const sheetNames = workbook.SheetNames || [];
-  console.log("📑 [NOTIF] Abas:", sheetNames);
+  console.log("📑 [NOTIF] Abas encontradas:", sheetNames);
 
   for (const sheetName of sheetNames) {
     const norm = normalizeKey(sheetName);
     if (norm.includes("ultimasnotificacoes") || norm.includes("notificacoes")) {
-      console.log(`✅ [NOTIF] Aba notificações: "${sheetName}"`);
+      console.log(`✅ [NOTIF] Aba de notificações: "${sheetName}"`);
       return workbook.Sheets[sheetName];
     }
   }
 
-  console.error('💥 [NOTIF] Não achei aba "Ultimas Notificações"/"Notificações".');
-  return null;
+  throw new Error(
+    'Aba "Últimas Notificações" / "Notificações" não encontrada na planilha.'
+  );
 }
 
 /**
@@ -130,46 +109,38 @@ function parseNotificationsSheet(sheet) {
       const enviarPushRaw =
         normalizedMap["enviarpush"] || normalizedMap["push"] || null;
 
-      if (!codigoImovelRaw || !msgCurtaRaw) {
-        return null;
-      }
+      if (!codigoImovelRaw || !msgCurtaRaw) return null;
 
       return {
         id: String(idRaw),
         dateTimeRaw: dataHoraRaw ? String(dataHoraRaw) : null,
-        codigoImovel: String(codigoImovelRaw).trim(), // ex: "SCP0105 Ribeirão Preto"
+        codigoImovel: String(codigoImovelRaw).trim(),
         title: String(tituloRaw).trim(),
         shortMessage: String(msgCurtaRaw).trim(),
-        detailedMessage: msgDetalhadaRaw ? String(msgDetalhadaRaw).trim() : null,
+        detailedMessage: msgDetalhadaRaw
+          ? String(msgDetalhadaRaw).trim()
+          : null,
         type: tipoRaw ? String(tipoRaw).trim() : null,
-        enviarPush: enviarPushRaw ? String(enviarPushRaw).trim().toUpperCase() : null,
+        enviarPush: enviarPushRaw
+          ? String(enviarPushRaw).trim().toUpperCase()
+          : null,
       };
     })
     .filter(Boolean);
 
-  console.log(`✅ [NOTIF] Notificações lidas: ${notifications.length}`);
+  console.log(`✅ [NOTIF] Notificações processadas: ${notifications.length}`);
   return notifications;
 }
 
 /**
- * Retorna notificações relevantes para um CPF específico.
- *
- * NOVA REGRA (robusta):
- * - Uma notificação pertence ao CPF se ele tiver aporte no Omie no projeto cujo nome = CodigoImovel
+ * Retorna notificações relevantes para um CPF específico
  */
 async function getNotificationsForCpf(cpfInput) {
   const cpf = String(cpfInput || "").replace(/[^\d]/g, "");
-  if (!cpf) {
-    console.log("⚠️ [NOTIF] getNotificationsForCpf chamado sem CPF válido.");
-    return [];
-  }
+  if (!cpf) return [];
 
   const workbook = await loadWorkbook();
-  if (!workbook) return [];
-
   const sheetNotif = findNotificationsSheet(workbook);
-  if (!sheetNotif) return [];
-
   const notifications = parseNotificationsSheet(sheetNotif);
 
   const result = [];
@@ -178,7 +149,6 @@ async function getNotificationsForCpf(cpfInput) {
     const propertyName = String(notif.codigoImovel || "").trim();
     if (!propertyName) continue;
 
-    // ✅ decide se esse CPF "tem" esse imóvel via aporte no Omie
     const invested = await getInvestorAmountForProject(cpf, propertyName);
 
     if (Number(invested || 0) > 0) {
@@ -192,7 +162,10 @@ async function getNotificationsForCpf(cpfInput) {
     return bTime - aTime;
   });
 
-  console.log(`📌 [NOTIF] CPF=${cpf} -> ${result.length} notificações (via Omie).`);
+  console.log(
+    `📌 [NOTIF] CPF=${cpf} -> ${result.length} notificações liberadas.`
+  );
+
   return result;
 }
 
