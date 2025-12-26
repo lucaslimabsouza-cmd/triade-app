@@ -8,6 +8,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -64,7 +66,6 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
       setErrorMsg("Informe CPF e senha.");
       return;
     }
-
     if (loading) return;
 
     try {
@@ -82,50 +83,82 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
 
       await tokenStorage.set(data.token);
 
-      const saved = await tokenStorage.get();
-      console.log("🔐 [LoginScreen] token saved?", !!saved);
+      const savedToken = await tokenStorage.get();
+      console.log("🔐 [LoginScreen] token saved?", !!savedToken);
 
       if (data.must_change_password) {
         navigation.navigate("ChangePassword", { token: data.token });
         return;
       }
 
-      // ✅ DESBLOQUEIO: entra no app imediatamente
-      console.log("🚀 [LoginScreen] calling onSignedIn()");
-      onSignedIn();
-      return;
+      // ✅ se já está habilitado, entra direto
+      const enabledBefore = await biometryStorage.getEnabled();
+      console.log("🔎 [LoginScreen] biometry enabled BEFORE prompt?", enabledBefore);
+
+      if (enabledBefore) {
+        console.log("🚀 [LoginScreen] already enabled -> onSignedIn()");
+        onSignedIn();
+        return;
+      }
+
+      // ✅ Só pergunta se este iPhone está pronto para FaceID
+      const canFaceId = await biometryService.canUseFaceId();
+      console.log("🔎 [LoginScreen] canUseFaceId?", canFaceId);
+
+      if (!canFaceId) {
+        onSignedIn();
+        return;
+      }
+
+      Alert.alert(
+        "Face ID",
+        "Deseja ativar o Face ID para acessar mais rápido nas próximas vezes?",
+        [
+          {
+            text: "Agora não",
+            style: "cancel",
+            onPress: () => {
+              console.log("ℹ️ [LoginScreen] user skipped FaceID enable");
+              onSignedIn();
+            },
+          },
+          {
+            text: "Ativar",
+            onPress: async () => {
+              try {
+                console.log("🟦 [LoginScreen] enabling FaceID...");
+
+                // ✅ rosto ou nada
+                const ok = await biometryService.authenticate("Ativar Face ID");
+                console.log("🟩 [LoginScreen] FaceID auth result:", ok);
+
+                if (!ok) {
+                  // cancelou / falhou -> entra normal sem habilitar
+                  onSignedIn();
+                  return;
+                }
+
+                await biometryStorage.setEnabled(true);
+
+                // ✅ prova definitiva: lê de volta e loga
+                const enabledNow = await biometryStorage.getEnabled();
+                console.log("✅ [LoginScreen] biometry enabled AFTER save?", enabledNow);
+
+                // entra no app
+                onSignedIn();
+
+                // (opcional) se você quiser "ver" a tela XP imediatamente:
+                // navigation.reset({ index: 0, routes: [{ name: "QuickAccess" as never }] });
+              } catch (e: any) {
+                console.log("❌ [LoginScreen] error enabling FaceID:", e?.message);
+                onSignedIn();
+              }
+            },
+          },
+        ]
+      );
     } catch (e) {
       setErrorMsg("Erro ao conectar. Tente novamente.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleLoginWithFaceId() {
-    setErrorMsg(null);
-    if (loading) return;
-
-    try {
-      setLoading(true);
-
-      const token = await tokenStorage.get();
-      if (!token) {
-        setErrorMsg("Nenhuma sessão encontrada. Faça login com CPF e senha primeiro.");
-        return;
-      }
-
-      const enabled = await biometryStorage.getEnabled();
-      if (!enabled) {
-        setErrorMsg("Face ID ainda não está habilitado.");
-        return;
-      }
-
-      const ok = await biometryService.authenticate("Entrar com Face ID");
-      if (!ok) return;
-
-      onSignedIn();
-    } catch {
-      setErrorMsg("Não foi possível usar Face ID agora.");
     } finally {
       setLoading(false);
     }
@@ -184,30 +217,28 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
               {errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
 
               <TouchableOpacity
-                style={styles.button}
-                onPress={handleLoginWithPassword}
-                activeOpacity={0.85}
+                onPress={() =>
+                  Alert.alert(
+                    "Esqueci minha senha",
+                    "Para alterar a senha, procure o responsável."
+                  )
+                }
               >
-                <Text style={styles.buttonText}>Entrar</Text>
+                <Text style={styles.forgotPassword}>Esqueci minha senha</Text>
               </TouchableOpacity>
 
-              <View style={styles.faceIdBlock}>
-                <Text style={styles.faceIdText}>
-                  Para usar Face ID, toque no ícone abaixo
-                </Text>
-
-                <TouchableOpacity
-                  onPress={handleLoginWithFaceId}
-                  activeOpacity={0.8}
-                  style={styles.faceIdIconBtn}
-                >
-                  <MaterialCommunityIcons
-                    name="face-recognition"
-                    size={26}
-                    color="#C0D0E5"
-                  />
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                style={styles.button}
+                onPress={handleLoginWithPassword}
+                disabled={loading}
+                activeOpacity={0.85}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.buttonText}>Entrar</Text>
+                )}
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -256,12 +287,15 @@ const styles = StyleSheet.create({
     borderColor: "#1F4C78",
   },
 
-  passwordWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 14,
-  },
+  passwordWrapper: { flexDirection: "row", alignItems: "center", marginBottom: 14 },
   eyeButton: { position: "absolute", right: 12 },
+
+  forgotPassword: {
+    color: "#8AB4FF",
+    textAlign: "right",
+    marginBottom: 10,
+    fontSize: 13,
+  },
 
   button: {
     backgroundColor: "#1E88E5",
@@ -273,24 +307,6 @@ const styles = StyleSheet.create({
 
   buttonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "600" },
   errorText: { color: "#FFB3B3", marginBottom: 8, fontSize: 13 },
-
-  faceIdBlock: { marginTop: 18, alignItems: "center" },
-  faceIdText: {
-    color: "#C0D0E5",
-    fontSize: 13,
-    marginBottom: 10,
-    textAlign: "center",
-  },
-  faceIdIconBtn: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#14395E",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#1F4C78",
-  },
 
   footer: { alignItems: "center", marginBottom: 10 },
   footerText: { fontSize: 12, color: "#9CAFC5" },

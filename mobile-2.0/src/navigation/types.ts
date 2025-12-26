@@ -4,6 +4,7 @@ export type RootStackParamList = {
 };
 
 export type AuthStackParamList = {
+  QuickAccess: undefined;
   Login: undefined;
   ChangePassword: { token: string };
 };

@@ -114,16 +114,11 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     <Screen title="Home" onLogout={onLogout} padding={16} contentTopOffset={0}>
       <View style={styles.header}>
         <Text style={styles.welcomeText}>Olá, investidor</Text>
-        <Text style={styles.subtitle}>
-          Acompanhe a evolução dos seus investimentos.
-        </Text>
+        <Text style={styles.subtitle}>Acompanhe a evolução dos seus investimentos.</Text>
       </View>
 
       <View style={styles.metricsRow}>
-        <MetricCard
-          label="Total dos investimentos"
-          value={formatCurrency(summary.totalInvested)}
-        />
+        <MetricCard label="Total dos investimentos" value={formatCurrency(summary.totalInvested)} />
       </View>
 
       <View style={styles.section}>
@@ -149,14 +144,8 @@ export function HomeScreen({ navigation, onLogout }: Props) {
 
       <View style={styles.section}>
         <View style={styles.metricsRow}>
-          <MetricCard
-            label="Lucro realizado"
-            value={formatCurrency(summary.totalRealizedProfit)}
-          />
-          <MetricCard
-            label="ROI médio realizado"
-            value={summary.averageRoi.toFixed(1) + "%"}
-          />
+          <MetricCard label="Lucro realizado" value={formatCurrency(summary.totalRealizedProfit)} />
+          <MetricCard label="ROI médio realizado" value={summary.averageRoi.toFixed(1) + "%"} />
         </View>
       </View>
 
@@ -164,10 +153,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
         <View style={styles.notifHeaderRow}>
           <Text style={styles.sectionTitle}>Últimas notificações</Text>
 
-          <TouchableOpacity
-            onPress={() => navigation.navigate("Notifications")}
-            activeOpacity={0.8}
-          >
+          <TouchableOpacity onPress={() => navigation.navigate("Notifications")} activeOpacity={0.8}>
             <Text style={styles.notifLink}>Ver todas →</Text>
           </TouchableOpacity>
         </View>

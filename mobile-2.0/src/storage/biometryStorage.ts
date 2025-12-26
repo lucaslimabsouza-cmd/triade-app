@@ -1,15 +1,22 @@
 import * as SecureStore from "expo-secure-store";
-import { SecureKeys } from "./secureKeys";
+
+const KEY = "triade_biometry_enabled_v1";
 
 export const biometryStorage = {
-  async setEnabled(enabled: boolean) {
-    await SecureStore.setItemAsync(SecureKeys.biometryEnabled, enabled ? "1" : "0");
+  async getEnabled(): Promise<boolean> {
+    try {
+      const v = await SecureStore.getItemAsync(KEY);
+      return v === "1";
+    } catch {
+      return false;
+    }
   },
-  async isEnabled() {
-    const v = await SecureStore.getItemAsync(SecureKeys.biometryEnabled);
-    return v === "1";
-  },
-  async clear() {
-    await SecureStore.deleteItemAsync(SecureKeys.biometryEnabled);
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    try {
+      await SecureStore.setItemAsync(KEY, enabled ? "1" : "0");
+    } catch {
+      // silêncio: não quebra o app
+    }
   },
 };

@@ -1,11 +1,11 @@
-// Fallback for using MaterialIcons on Android and web.
+// Fallback for using MaterialCommunityIcons on Android and web.
 
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import nsMaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { SymbolWeight, SymbolViewProps } from 'expo-symbols';
 import { ComponentProps } from 'react';
 import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
 
-type IconMapping = Record<SymbolViewProps['name'], ComponentProps<typeof MaterialIcons>['name']>;
+type IconMapping = Record<SymbolViewProps['name'], ComponentProps<typeof MaterialCommunityIcons>['name']>;
 type IconSymbolName = keyof typeof MAPPING;
 
 /**
@@ -37,5 +37,5 @@ export function IconSymbol({
   style?: StyleProp<TextStyle>;
   weight?: SymbolWeight;
 }) {
-  return <MaterialIcons color={color} size={size} name={MAPPING[name]} style={style} />;
+  return <MaterialCommunityIcons color={color} size={size} name={MAPPING[name]} style={style} />;
 }
