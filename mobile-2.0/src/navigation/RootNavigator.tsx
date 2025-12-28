@@ -22,7 +22,6 @@ export function RootNavigator() {
 
   async function handleLogout() {
     await tokenStorage.clear();
-    await biometryStorage.setEnabled(false);
     setSignedIn(false);
   }
 

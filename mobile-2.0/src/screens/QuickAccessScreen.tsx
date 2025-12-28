@@ -1,19 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Image, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import TriadeLoading from "../ui/TriadeLoading";
+import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 
+import TriadeLoading from "../ui/TriadeLoading";
 import { biometryService } from "../services/biometryService";
 import { tokenStorage } from "../storage/tokenStorage";
 import { biometryStorage } from "../storage/biometryStorage";
-import { lastLoginStorage } from "../storage/lastLoginStorage";
+import { quickAccessStorage } from "../storage/quickAccessStorage";
+import { AuthStackParamList } from "../navigation/types";
 
 const MAIN_BLUE = "#0E2A47";
 const logo = require("../../assets/logo-triade.png");
 
-type Props = {
+type Props = NativeStackScreenProps<AuthStackParamList, "QuickAccess"> & {
   onSignedIn: () => void;
-  onUseAnotherAccount: () => void; // aqui deve levar pro Login
+  onUseAnotherAccount: () => void;
 };
 
 function formatCpf(cpf?: string | null) {
@@ -22,8 +24,9 @@ function formatCpf(cpf?: string | null) {
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 }
 
-export default function QuickAccessScreen({ onSignedIn, onUseAnotherAccount }: Props) {
+export default function QuickAccessScreen({ navigation, onSignedIn, onUseAnotherAccount }: Props) {
   const [loading, setLoading] = useState(true);
+  const [name, setName] = useState<string | null>(null);
   const [cpf, setCpf] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,8 +34,11 @@ export default function QuickAccessScreen({ onSignedIn, onUseAnotherAccount }: P
 
     (async () => {
       try {
-        const savedCpf = await lastLoginStorage.getCpf();
+        const savedName = await quickAccessStorage.getName();
+        const savedCpf = await quickAccessStorage.getCpf();
+
         if (!alive) return;
+        setName(savedName ?? null);
         setCpf(savedCpf ?? null);
       } finally {
         if (!alive) return;
@@ -45,38 +51,44 @@ export default function QuickAccessScreen({ onSignedIn, onUseAnotherAccount }: P
     };
   }, []);
 
+  function goToLogin() {
+    navigation.reset({ index: 0, routes: [{ name: "Login" }] });
+  }
+
   async function handleAccess() {
     try {
       setLoading(true);
 
       const token = await tokenStorage.get();
+      console.log("🔎 [QuickAccess] token?", !!token);
+
       if (!token) {
         Alert.alert("Sessão", "Nenhuma sessão encontrada. Entre com CPF e senha.");
-        onUseAnotherAccount();
+        goToLogin();
         return;
       }
 
       const enabled = await biometryStorage.getEnabled();
+      console.log("🔎 [QuickAccess] biometry enabled?", enabled);
+
       if (!enabled) {
-        Alert.alert(
-          "Face ID",
-          "O Face ID ainda não está ativado neste aparelho. Faça login com CPF e senha para ativar."
-        );
-        onUseAnotherAccount();
+        Alert.alert("Face ID", "O Face ID não está ativado. Entre com CPF e senha para ativar.");
+        goToLogin();
         return;
       }
 
       const canUse = await biometryService.canUseFaceId();
+      console.log("🔎 [QuickAccess] canUseFaceId?", canUse);
+
       if (!canUse) {
-        Alert.alert(
-          "Face ID",
-          "Este aparelho não está pronto para Face ID. Verifique o Face ID nas configurações do iPhone."
-        );
-        onUseAnotherAccount();
+        Alert.alert("Face ID", "Face ID indisponível neste aparelho. Verifique as configurações.");
+        goToLogin();
         return;
       }
 
       const ok = await biometryService.authenticate("Acessar com Face ID");
+      console.log("🟩 [QuickAccess] FaceID result:", ok);
+
       if (!ok) return;
 
       onSignedIn();
@@ -86,10 +98,12 @@ export default function QuickAccessScreen({ onSignedIn, onUseAnotherAccount }: P
   }
 
   async function handleAnotherAccount() {
-    // ✅ aqui sim: “usar outra conta” zera tudo
     await tokenStorage.clear();
     await biometryStorage.setEnabled(false);
+    await quickAccessStorage.clear();
+
     onUseAnotherAccount();
+    goToLogin();
   }
 
   if (loading) return <TriadeLoading />;
@@ -100,6 +114,8 @@ export default function QuickAccessScreen({ onSignedIn, onUseAnotherAccount }: P
         <View style={styles.topBlock}>
           <Image source={logo} style={styles.logo} resizeMode="contain" />
           <Text style={styles.title}>Bem-vindo de volta</Text>
+
+          {name ? <Text style={styles.name}>{name}</Text> : null}
           {cpf ? <Text style={styles.subtitle}>CPF: {formatCpf(cpf)}</Text> : null}
         </View>
 
@@ -128,7 +144,9 @@ const styles = StyleSheet.create({
   logo: { width: 300, height: 150, alignSelf: "center", marginBottom: 8, marginTop: 10 },
   topBlock: { marginTop: -20 },
   title: { fontSize: 22, color: "#E0E7F0", textAlign: "center", fontWeight: "800" },
-  subtitle: { fontSize: 14, color: "#C0D0E5", textAlign: "center", marginTop: 8 },
+
+  name: { fontSize: 16, color: "#FFFFFF", textAlign: "center", marginTop: 10, fontWeight: "700" },
+  subtitle: { fontSize: 13, color: "#C0D0E5", textAlign: "center", marginTop: 6 },
 
   actions: { gap: 14 },
   button: {

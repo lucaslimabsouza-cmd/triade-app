@@ -1,4 +1,4 @@
-// mobile/app/operation-details.tsx
+// src/screens/OperationDetailsScreen.tsx
 import React from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -10,14 +10,14 @@ import {
   Alert,
   Linking,
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { AppStackParamList } from "../navigation/types";
 
 const MAIN_BLUE = "#0E2A47";
 
 function normalizeUrl(u?: string | null) {
   const raw = String(u ?? "").trim();
   if (!raw) return null;
-  // se vier sem http, tenta corrigir
   if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
     return `https://${raw}`;
   }
@@ -37,53 +37,32 @@ async function openUrl(url: string) {
   }
 }
 
-export default function OperationDetailsScreen() {
-  const router = useRouter();
+type Props = NativeStackScreenProps<AppStackParamList, "OperationDetails">;
 
-  const params = useLocalSearchParams<{
-    id?: string;
-    name?: string;
-    city?: string;
-    state?: string;
-    status?: string;
-    amountInvested?: string;
-    roi?: string;
-    expectedReturn?: string; // não vamos confiar nesse valor
-    realizedProfit?: string;
-    totalCosts?: string;
-    estimatedTerm?: string;
-    realizedTerm?: string;
-
-    // ✅ NOVO: documentos (vindo da tela anterior)
-    cartaArrematacao?: string;
-    matriculaConsolidada?: string;
-  }>();
+export function OperationDetailsScreen({ navigation, route }: Props) {
+  const params = route.params;
 
   const isFinished = params.status === "concluida";
 
-  // URLs normalizadas
   const cartaUrl = normalizeUrl(params.cartaArrematacao);
   const matriculaUrl = normalizeUrl(params.matriculaConsolidada);
 
-  // Prazo estimado
   const estimatedTermLabel =
     params.estimatedTerm && params.estimatedTerm !== ""
       ? `${params.estimatedTerm} meses`
       : "—";
 
-  // Prazo realizado
   const realizedTermLabel =
     isFinished && params.realizedTerm && params.realizedTerm !== ""
       ? `${params.realizedTerm} meses`
       : "—";
 
-  // ROI: 0.3 -> 30
   const roiRaw = Number(params.roi ?? 0);
   const roiPercent = roiRaw < 1 ? roiRaw * 100 : roiRaw;
 
   const amountInvestedValue = Number(params.amountInvested ?? 0);
 
-  // 👉 Regra Triade: lucro esperado = VI × ROI esperado
+  // Regra Triade: lucro esperado = VI × ROI esperado
   const expectedReturnValue =
     amountInvestedValue && roiPercent
       ? amountInvestedValue * (roiPercent / 100)
@@ -115,18 +94,22 @@ export default function OperationDetailsScreen() {
       ? (operation.realizedProfit / operation.amountInvested) * 100
       : 0;
 
-  function goToCosts() {
-    const url = `/operation-costs?id=${operation.id}&name=${encodeURIComponent(
-      operation.name
-    )}`;
-    router.push(url);
+  function goToTimeline() {
+    // ⚠️ precisa existir "OperationTimeline" no AppNavigator/types para funcionar
+    // passa o id, nome e status igual você fazia no antigo
+    navigation.navigate("OperationTimeline" as never, {
+      id: String(operation.id),
+      name: String(operation.name),
+      status: String(params.status ?? ""),
+    } as never);
   }
 
-  function goToTimeline() {
-    const url = `/operation-timeline?id=${operation.id}&name=${encodeURIComponent(
-      operation.name
-    )}&status=${params.status}`;
-    router.push(url);
+  function goToCosts() {
+    // ⚠️ precisa existir "OperationCosts" no AppNavigator/types para funcionar
+    navigation.navigate("OperationCosts" as never, {
+      id: String(operation.id),
+      name: String(operation.name),
+    } as never);
   }
 
   function handleOpenDoc(url: string | null, label: string) {
@@ -138,9 +121,22 @@ export default function OperationDetailsScreen() {
   }
 
   return (
-<SafeAreaView style={styles.container} edges={["left", "right", "bottom"]}>
-
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <ScrollView contentContainerStyle={styles.content}>
+        {/* ✅ HEADER PADRÃO (igual você quer) */}
+        <View style={styles.headerRow}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.8}
+            style={styles.backBtn}
+          >
+            <Text style={styles.backText}>← Voltar</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.headerTitle}>Detalhes</Text>
+          <View style={{ width: 70 }} />
+        </View>
+
         {/* Cabeçalho */}
         <View style={styles.header}>
           <Text style={styles.title}>Detalhes da operação</Text>
@@ -156,7 +152,7 @@ export default function OperationDetailsScreen() {
             {operation.city} - {operation.state}
           </Text>
 
-          {/* Linha do status */}
+          {/* Status */}
           <View style={styles.statusRow}>
             <View
               style={[
@@ -187,7 +183,7 @@ export default function OperationDetailsScreen() {
             )}
           </View>
 
-          {/* Link para linha do tempo */}
+          {/* ✅ Link para linha do tempo (voltou) */}
           <TouchableOpacity
             style={styles.timelineLink}
             activeOpacity={0.8}
@@ -245,7 +241,7 @@ export default function OperationDetailsScreen() {
           </View>
         </View>
 
-        {/* 💰 CUSTOS DO PROJETO */}
+        {/* ✅ CUSTOS DO PROJETO (clicável voltou) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Custos do projeto</Text>
 
@@ -262,7 +258,7 @@ export default function OperationDetailsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* 📎 Documentos */}
+        {/* Documentos */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Documentos e anexos</Text>
 
@@ -293,6 +289,8 @@ export default function OperationDetailsScreen() {
   );
 }
 
+export default OperationDetailsScreen;
+
 function DocRow({
   label,
   available,
@@ -319,18 +317,27 @@ function DocRow({
   );
 }
 
-// Utils
 function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
+  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-// Estilos
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: MAIN_BLUE },
-  content: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 40 },
+
+  // ✅ padrão “descer” (igual Operations)
+  content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
+
+  // header padrão
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  backBtn: { width: 70, paddingVertical: 6 },
+  backText: { color: "#8AB4FF", fontSize: 13, fontWeight: "700" },
+  headerTitle: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+
   header: { marginBottom: 16 },
   title: { fontSize: 22, color: "#FFFFFF", fontWeight: "600" },
   subtitle: { fontSize: 14, color: "#D0D7E3", marginTop: 4 },
@@ -344,15 +351,9 @@ const styles = StyleSheet.create({
   propertyName: { fontSize: 18, color: "#FFFFFF", fontWeight: "600" },
   location: { fontSize: 13, color: "#C5D2E0", marginTop: 4 },
 
-  statusRow: {
-    flexDirection: "row",
-    marginTop: 12,
-  },
-  termColumn: {
-    marginTop: 8,
-    alignSelf: "flex-start",
-    gap: 8,
-  },
+  statusRow: { flexDirection: "row", marginTop: 12 },
+  termColumn: { marginTop: 8, alignSelf: "flex-start", gap: 8 },
+
   chip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -364,6 +365,7 @@ const styles = StyleSheet.create({
   realizedTermChip: { backgroundColor: "#27AE6055" },
   chipText: { color: "#FFFFFF", fontSize: 11, fontWeight: "500" },
 
+  // ✅ timeline link
   timelineLink: { marginTop: 10 },
   timelineLinkText: {
     color: "#8AB4FF",
@@ -378,6 +380,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginBottom: 10,
   },
+
   metricsRow: { flexDirection: "row", gap: 12, marginBottom: 10 },
   metricCard: {
     flex: 1,
@@ -392,6 +395,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 4,
   },
+
+  // ✅ costs clicável
   costCard: {
     backgroundColor: "#14395E",
     borderRadius: 12,
@@ -399,35 +404,20 @@ const styles = StyleSheet.create({
   },
   costHint: { color: "#8AB4FF", fontSize: 12, marginTop: 8 },
 
-  // docs
   docsCard: {
     backgroundColor: "#14395E",
     borderRadius: 12,
     overflow: "hidden",
   },
-  docRow: {
-    padding: 14,
-  },
-  docRowDisabled: {
-    opacity: 0.6,
-  },
+  docRow: { padding: 14 },
+  docRowDisabled: { opacity: 0.6 },
   docLabel: {
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "600",
     marginBottom: 4,
   },
-  docStatus: {
-    color: "#8AB4FF",
-    fontSize: 12,
-  },
-  docDivider: {
-    height: 1,
-    backgroundColor: "#1F4C78",
-  },
-  docsEmptyHint: {
-    color: "#C3C9D6",
-    fontSize: 12,
-    marginTop: 8,
-  },
+  docStatus: { color: "#8AB4FF", fontSize: 12 },
+  docDivider: { height: 1, backgroundColor: "#1F4C78" },
+  docsEmptyHint: { color: "#C3C9D6", fontSize: 12, marginTop: 8 },
 });

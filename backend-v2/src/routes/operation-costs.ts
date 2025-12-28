@@ -50,10 +50,9 @@ const cleanStr = (v: any) => {
 
 // categorias que NÃO entram na soma
 const EXCLUDED_CATEGORY_CODES = new Set(["2.10.98", "2.10.99"]);
-
 const isNaturezaP = (m: any) => cleanStr(m?.natureza).toLowerCase() === "p";
 
-// normaliza só para COMPARAR (exclusão e fallback de match)
+// normaliza só para comparação (exclusão e fallback)
 const normalizeForCompare = (v: any) => {
   const s = cleanStr(v);
   if (!s) return "";
@@ -66,9 +65,15 @@ const normalizeForCompare = (v: any) => {
     .join(".");
 };
 
-type CatMeta = { name?: string; description?: string };
+const chunk = <T,>(arr: T[], size: number) => {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
 
-// ✅ Carrega TODAS as categorias do omie_categories (paginado) e cria map
+type CatMeta = { name?: string; description?: string };
+type PartyMeta = { name: string };
+
 async function loadAllCategoriesMap(): Promise<Map<string, CatMeta>> {
   const map = new Map<string, CatMeta>();
 
@@ -80,12 +85,12 @@ async function loadAllCategoriesMap(): Promise<Map<string, CatMeta>> {
 
     const resp = await supabaseAdmin
       .from("omie_categories")
-      .select("omie_code, name, description")
+      .select("omie_code, name")
       .range(from, to);
 
     if (resp.error) {
       console.error("❌ [operation-costs] loadAllCategoriesMap error:", resp.error);
-      break; // não derruba a rota; só vai ficar sem nomes
+      break;
     }
 
     const rows = (resp.data ?? []) as any[];
@@ -98,26 +103,19 @@ async function loadAllCategoriesMap(): Promise<Map<string, CatMeta>> {
         description: cleanStr(r.description) || undefined,
       };
 
-      // grava pelo raw
       map.set(raw, meta);
 
-      // grava também pelo normalizado (pra casar "2.10.01" x "2.10.1")
       const key = normalizeForCompare(raw);
       if (key) map.set(key, meta);
     }
 
-    // acabou (última página)
     if (rows.length < PAGE) break;
-
     from += PAGE;
   }
 
   return map;
 }
 
-type PartyMeta = { name: string };
-
-// ✅ Carrega parties necessárias (paginado por IN em lotes)
 async function loadPartiesMap(partyCodes: string[]): Promise<Map<string, PartyMeta>> {
   const map = new Map<string, PartyMeta>();
   if (!partyCodes.length) return map;
@@ -145,6 +143,104 @@ async function loadPartiesMap(partyCodes: string[]): Promise<Map<string, PartyMe
 
   return map;
 }
+
+/**
+ * DEBUG TEMPORÁRIO
+ * GET /operation-costs/:operationId/debug-category
+ *
+ * Mostra:
+ * - opName
+ * - codProjeto
+ * - sampleMovement (com cod_categoria)
+ * - lookup direto: omie_categories.omie_code == cod_categoria
+ */
+router.get("/:operationId/debug-category", requireAuth, async (req: any, res) => {
+  const operationId = cleanStr(req.params?.operationId);
+
+  try {
+    if (!operationId) {
+      return res.status(400).json({ ok: false, error: "operationId inválido" });
+    }
+
+    // 1) operation -> name
+    const opResp = await supabaseAdmin
+      .from("operations")
+      .select("id, name")
+      .eq("id", operationId)
+      .maybeSingle();
+
+    if (opResp.error) {
+      return res.status(500).json({ ok: false, where: "operations", error: opResp.error });
+    }
+
+    const opName = cleanStr(opResp.data?.name);
+    if (!opName) {
+      return res.status(404).json({ ok: false, error: "Operação não encontrada" });
+    }
+
+    // 2) name -> cod_projeto
+    let projResp = await supabaseAdmin
+      .from("omie_projects")
+      .select("omie_internal_code, name")
+      .eq("name", opName)
+      .limit(1);
+
+    if (!projResp.error && (projResp.data?.length ?? 0) === 0) {
+      projResp = await supabaseAdmin
+        .from("omie_projects")
+        .select("omie_internal_code, name")
+        .ilike("name", opName)
+        .limit(1);
+    }
+
+    if (projResp.error) {
+      return res.status(500).json({ ok: false, where: "omie_projects", error: projResp.error });
+    }
+
+    const codProjeto = cleanStr(projResp.data?.[0]?.omie_internal_code);
+    if (!codProjeto) {
+      return res.status(200).json({ ok: true, opName, hint: "Sem codProjeto para esse name" });
+    }
+
+    // 3) pega alguns movimentos e escolhe um com cod_categoria
+    const movResp = await supabaseAdmin
+      .from("omie_mf_movements")
+      .select("cod_categoria, natureza, valor, cod_cliente")
+      .eq("cod_projeto", codProjeto)
+      .limit(30);
+
+    if (movResp.error) {
+      return res.status(500).json({ ok: false, where: "omie_mf_movements", error: movResp.error });
+    }
+
+    const rows = movResp.data ?? [];
+    const sample = rows.find((r: any) => cleanStr(r.cod_categoria));
+
+    const codCategoria = cleanStr(sample?.cod_categoria);
+
+    // 4) lookup direto (o mais simples possível)
+    const catResp = await supabaseAdmin
+      .from("omie_categories")
+      .select("omie_code, name")
+      .eq("omie_code", codCategoria)
+      .maybeSingle();
+
+    return res.status(200).json({
+      ok: true,
+      opName,
+      codProjeto,
+      sampleMovement: sample ?? null,
+      codCategoria: codCategoria || null,
+      categoryLookup: {
+        data: catResp.data ?? null,
+        error: catResp.error ?? null,
+      },
+    });
+  } catch (e: any) {
+    console.error("💥 [/operation-costs debug-category] error:", e);
+    return res.status(500).json({ ok: false, error: "Erro no debug-category" });
+  }
+});
 
 /**
  * GET /operation-costs/:operationId
@@ -247,20 +343,18 @@ router.get("/:operationId", requireAuth, async (req: any, res) => {
       byCategory.set(categoryCode, current);
     }
 
-    // ✅ 6) carrega TODAS as categorias e faz lookup local (sem .in)
+    // 6) carrega catálogo inteiro de categorias (não depende de IN)
     const categoryMap = await loadAllCategoriesMap();
 
     // 7) carrega parties necessárias
     const partyCodes = Array.from(
       new Set(includedMoves.map((m: any) => cleanStr(m.cod_cliente)).filter(Boolean))
     );
-
     const partyMap = await loadPartiesMap(partyCodes);
 
     // 8) montar resposta final
     const categories = Array.from(byCategory.entries())
       .map(([categoryCode, agg]) => {
-        // tenta match RAW, e se não achar tenta match normalizado
         const meta =
           categoryMap.get(categoryCode) || categoryMap.get(normalizeForCompare(categoryCode));
 

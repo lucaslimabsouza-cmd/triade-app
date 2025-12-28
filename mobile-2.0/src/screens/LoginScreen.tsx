@@ -5,11 +5,11 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Image,
   Alert,
-  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -23,6 +23,7 @@ import { biometryService } from "../services/biometryService";
 import { tokenStorage } from "../storage/tokenStorage";
 import { lastLoginStorage } from "../storage/lastLoginStorage";
 import { biometryStorage } from "../storage/biometryStorage";
+import { quickAccessStorage } from "../storage/quickAccessStorage";
 
 const MAIN_BLUE = "#0E2A47";
 const logo = require("../../assets/logo-triade.png");
@@ -66,6 +67,7 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
       setErrorMsg("Informe CPF e senha.");
       return;
     }
+
     if (loading) return;
 
     try {
@@ -81,31 +83,38 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
         return;
       }
 
+      // 🔐 token
       await tokenStorage.set(data.token);
-
       const savedToken = await tokenStorage.get();
       console.log("🔐 [LoginScreen] token saved?", !!savedToken);
+
+      // ✅ salva nome + cpf p/ QuickAccess
+      await quickAccessStorage.setUser(
+        data.party?.name ?? "",
+        data.party?.cpf_cnpj ?? rawCpf
+      );
 
       if (data.must_change_password) {
         navigation.navigate("ChangePassword", { token: data.token });
         return;
       }
 
-      // ✅ se já está habilitado, entra direto
+      // Se já habilitado, entra direto
       const enabledBefore = await biometryStorage.getEnabled();
       console.log("🔎 [LoginScreen] biometry enabled BEFORE prompt?", enabledBefore);
 
       if (enabledBefore) {
-        console.log("🚀 [LoginScreen] already enabled -> onSignedIn()");
+        console.log("🚀 [LoginScreen] calling onSignedIn()");
         onSignedIn();
         return;
       }
 
-      // ✅ Só pergunta se este iPhone está pronto para FaceID
+      // Só pergunta se o device suporta
       const canFaceId = await biometryService.canUseFaceId();
       console.log("🔎 [LoginScreen] canUseFaceId?", canFaceId);
 
       if (!canFaceId) {
+        console.log("🚀 [LoginScreen] no faceid available -> onSignedIn()");
         onSignedIn();
         return;
       }
@@ -128,36 +137,32 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
               try {
                 console.log("🟦 [LoginScreen] enabling FaceID...");
 
-                // ✅ rosto ou nada
                 const ok = await biometryService.authenticate("Ativar Face ID");
                 console.log("🟩 [LoginScreen] FaceID auth result:", ok);
 
                 if (!ok) {
-                  // cancelou / falhou -> entra normal sem habilitar
-                  onSignedIn();
-                  return;
+                  Alert.alert(
+                    "Face ID",
+                    "Não foi possível confirmar o Face ID agora (cancelado ou falhou). O Face ID não foi ativado."
+                  );
+                  return; // ❗não entra
                 }
 
                 await biometryStorage.setEnabled(true);
-
-                // ✅ prova definitiva: lê de volta e loga
                 const enabledNow = await biometryStorage.getEnabled();
                 console.log("✅ [LoginScreen] biometry enabled AFTER save?", enabledNow);
 
-                // entra no app
+                Alert.alert("Face ID", "Face ID ativado com sucesso.");
                 onSignedIn();
-
-                // (opcional) se você quiser "ver" a tela XP imediatamente:
-                // navigation.reset({ index: 0, routes: [{ name: "QuickAccess" as never }] });
               } catch (e: any) {
                 console.log("❌ [LoginScreen] error enabling FaceID:", e?.message);
-                onSignedIn();
+                Alert.alert("Face ID", "Falha ao ativar o Face ID.");
               }
             },
           },
         ]
       );
-    } catch (e) {
+    } catch (e: any) {
       setErrorMsg("Erro ao conectar. Tente novamente.");
     } finally {
       setLoading(false);
