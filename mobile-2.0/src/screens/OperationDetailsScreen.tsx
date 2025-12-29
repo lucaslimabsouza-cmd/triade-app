@@ -1,6 +1,6 @@
 // src/screens/OperationDetailsScreen.tsx
 
-import React from "react";
+import React, { useMemo } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   View,
@@ -41,12 +41,33 @@ async function openUrl(url: string) {
 type Props = NativeStackScreenProps<AppStackParamList, "OperationDetails">;
 
 export function OperationDetailsScreen({ navigation, route }: Props) {
-  const params = route.params;
+  // deixa “any” aqui pra não quebrar enquanto você ajusta types
+  const params = route.params as any;
 
-  const isFinished = params.status === "concluida";
+  const statusParam = String(params.status ?? "em_andamento");
+  const isFinished = statusParam === "concluida";
 
-  const cartaUrl = normalizeUrl(params.cartaArrematacao);
-  const matriculaUrl = normalizeUrl(params.matriculaConsolidada);
+  /**
+   * ✅ Robustez:
+   * - formato novo: params.documents.{cartaArrematacao, matriculaConsolidada, contratoScp}
+   * - formato antigo: params.cartaArrematacao / params.matriculaConsolidada / params.contratoScp
+   */
+  const docs = useMemo(() => {
+    const d = params?.documents ?? {};
+    return {
+      cartaArrematacao: d.cartaArrematacao ?? params?.cartaArrematacao ?? "",
+      matriculaConsolidada: d.matriculaConsolidada ?? params?.matriculaConsolidada ?? "",
+      contratoScp: d.contratoScp ?? params?.contratoScp ?? "",
+    };
+  }, [params]);
+
+  const cartaUrl = normalizeUrl(docs.cartaArrematacao);
+  const matriculaUrl = normalizeUrl(docs.matriculaConsolidada);
+  const contratoScpUrl = normalizeUrl(docs.contratoScp);
+
+  // ✅ LOG rápido para teste
+  console.log("🧩 [OperationDetails] docs =", docs);
+  console.log("🧩 [OperationDetails] urls =", { cartaUrl, matriculaUrl, contratoScpUrl });
 
   const estimatedTermLabel =
     params.estimatedTerm && params.estimatedTerm !== ""
@@ -70,13 +91,13 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
 
   const operation = {
     id: params.id ?? "",
-    name: params.name ?? "Operação",
+    name: params.name ?? params.propertyName ?? "Operação",
     city: params.city ?? "Cidade",
     state: params.state ?? "UF",
     status:
-      params.status === "em_andamento"
+      statusParam === "em_andamento"
         ? "Em andamento"
-        : params.status === "concluida"
+        : statusParam === "concluida"
         ? "Concluída"
         : "Em andamento",
     amountInvested: amountInvestedValue,
@@ -94,18 +115,18 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
       : 0;
 
   function goToTimeline() {
-    navigation.navigate("OperationTimeline", {
+    navigation.navigate("OperationTimeline" as never, {
       id: String(operation.id),
       name: String(operation.name),
-      status: params.status,
-    });
+      status: statusParam,
+    } as never);
   }
 
   function goToCosts() {
-    navigation.navigate("OperationCosts", {
+    navigation.navigate("OperationCosts" as never, {
       id: String(operation.id),
       name: String(operation.name),
-    });
+    } as never);
   }
 
   function handleOpenDoc(url: string | null, label: string) {
@@ -152,7 +173,7 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
             <View
               style={[
                 styles.chip,
-                params.status === "concluida"
+                statusParam === "concluida"
                   ? styles.statusChipFinished
                   : styles.statusChipActive,
               ]}
@@ -177,7 +198,7 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
             )}
           </View>
 
-          {/* ✅ Linha do tempo */}
+          {/* Linha do tempo */}
           <TouchableOpacity
             style={styles.timelineLink}
             activeOpacity={0.8}
@@ -210,7 +231,9 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
 
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>ROI % esperado</Text>
-              <Text style={styles.metricValue}>{`${operation.roi.toFixed(1)}%`}</Text>
+              <Text style={styles.metricValue}>
+                {`${operation.roi.toFixed(1)}%`}
+              </Text>
             </View>
           </View>
 
@@ -266,9 +289,17 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
               available={!!matriculaUrl}
               onPress={() => handleOpenDoc(matriculaUrl, "Matrícula consolidada")}
             />
+
+            <View style={styles.docDivider} />
+
+            <DocRow
+              label="Contrato SCP"
+              available={!!contratoScpUrl}
+              onPress={() => handleOpenDoc(contratoScpUrl, "Contrato SCP")}
+            />
           </View>
 
-          {!cartaUrl && !matriculaUrl && (
+          {!cartaUrl && !matriculaUrl && !contratoScpUrl && (
             <Text style={styles.docsEmptyHint}>Ainda não disponível.</Text>
           )}
         </View>
@@ -312,7 +343,6 @@ function formatCurrency(value: number): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: MAIN_BLUE },
 
-  // ✅ padrão “descer”
   content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
 
   headerRow: {
@@ -379,12 +409,26 @@ const styles = StyleSheet.create({
   },
 
   costCard: { backgroundColor: "#14395E", borderRadius: 12, padding: 14 },
-  costHint: { color: "#8AB4FF", fontSize: 12, marginTop: 8, fontWeight: "600" },
+  costHint: {
+    color: "#8AB4FF",
+    fontSize: 12,
+    marginTop: 8,
+    fontWeight: "600",
+  },
 
-  docsCard: { backgroundColor: "#14395E", borderRadius: 12, overflow: "hidden" },
+  docsCard: {
+    backgroundColor: "#14395E",
+    borderRadius: 12,
+    overflow: "hidden",
+  },
   docRow: { padding: 14 },
   docRowDisabled: { opacity: 0.6 },
-  docLabel: { color: "#FFFFFF", fontSize: 14, fontWeight: "600", marginBottom: 4 },
+  docLabel: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
   docStatus: { color: "#8AB4FF", fontSize: 12, fontWeight: "600" },
   docDivider: { height: 1, backgroundColor: "#1F4C78" },
   docsEmptyHint: { color: "#C3C9D6", fontSize: 12, marginTop: 8 },

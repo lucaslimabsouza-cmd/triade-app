@@ -17,20 +17,23 @@ export type AppStackParamList = {
 
   OperationDetails: {
     id: string;
-    name?: string;
-    city?: string;
-    state?: string;
-    status?: string;
-    amountInvested?: string;
-    roi?: string;
-    expectedReturn?: string;
-    realizedProfit?: string;
-    totalCosts?: string;
-    estimatedTerm?: string;
-    realizedTerm?: string;
-    cartaArrematacao?: string;
-    matriculaConsolidada?: string;
-  };
+    name: string;
+    city: string;
+    state: string;
+    status: "em_andamento" | "concluida";
+
+    amountInvested: number;
+    roi: number;
+    realizedProfit: number;
+    totalCosts: number;
+    estimatedTerm: number | string;
+    realizedTerm: number | string;
+
+    documents: {
+      cartaArrematacao?: string;
+      matriculaConsolidada?: string;
+      contratoScp?: string; // ✅ NOVO
+    };
 
   OperationTimeline: {
     id: string;

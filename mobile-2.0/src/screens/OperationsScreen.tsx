@@ -112,6 +112,7 @@ export function OperationsScreen({ navigation }: Props) {
       realizedTerm: String(op.realizedTerm ?? ""),
       cartaArrematacao: String(cartaArrematacao),
       matriculaConsolidada: String(matriculaConsolidada),
+      contratoScp: op.documents?.contratoScp ?? "",
     });
   }
 
