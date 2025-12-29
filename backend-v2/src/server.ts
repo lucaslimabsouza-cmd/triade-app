@@ -16,6 +16,8 @@ import authRouter from "./routes/auth";
 import operationsRouter from "./routes/operations";
 
 import operationCostsRouter from "./routes/operation-costs";
+import operationFinancialRoutes from "./routes/operation-financial";
+
 
 
 const app = express();
@@ -46,6 +48,8 @@ app.use("/auth", authRouter);
    App (logado)
 ========================= */
 app.use("/operations", operationsRouter);
+app.use(operationFinancialRoutes);
+
 
 app.use("/operation-costs", operationCostsRouter);
 console.log("✅ route mounted: /operation-costs");

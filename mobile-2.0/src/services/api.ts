@@ -4,7 +4,7 @@ import { tokenStorage } from "../storage/tokenStorage";
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,
+  timeout: 30000, // ✅ aumenta
 });
 
 api.interceptors.request.use(async (config) => {
@@ -14,7 +14,11 @@ api.interceptors.request.use(async (config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
-  console.log(`➡️ [API] ${String(config.method).toUpperCase()} ${config.baseURL}${config.url}`);
+  console.log(
+    `➡️ [API] ${String(config.method).toUpperCase()} ${config.baseURL}${config.url}`
+  );
 
   return config;
 });
+
+export default api;

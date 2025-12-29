@@ -1,6 +1,6 @@
 // src/screens/OperationDetailsScreen.tsx
 
-import React, { useMemo } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   View,
@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/types";
+import { api } from "../services/api";
 
 const MAIN_BLUE = "#0E2A47";
 
@@ -23,6 +24,14 @@ function normalizeUrl(u?: string | null) {
     return `https://${raw}`;
   }
   return raw;
+}
+
+function isValidUuid(u?: string) {
+  if (!u) return false;
+  const s = String(u).trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    s
+  );
 }
 
 async function openUrl(url: string) {
@@ -40,23 +49,35 @@ async function openUrl(url: string) {
 
 type Props = NativeStackScreenProps<AppStackParamList, "OperationDetails">;
 
-export function OperationDetailsScreen({ navigation, route }: Props) {
-  // deixa “any” aqui pra não quebrar enquanto você ajusta types
+function OperationDetailsScreen({ navigation, route }: Props) {
   const params = route.params as any;
+
+  // ✅ pega um UUID "limpo" (sem normalizar dígitos, sem replace)
+  const operationId = useMemo(() => {
+    const raw = String(
+      params?.id ??
+        params?.operation_id ??
+        params?.operationId ??
+        params?.uuid ??
+        ""
+    ).trim();
+    return raw;
+  }, [params]);
+
+  console.log("🧩 [OperationDetails] params.id =", params?.id);
+  console.log("🧩 [OperationDetails] operationId final =", operationId);
+
+  const validOperationId = isValidUuid(operationId);
 
   const statusParam = String(params.status ?? "em_andamento");
   const isFinished = statusParam === "concluida";
 
-  /**
-   * ✅ Robustez:
-   * - formato novo: params.documents.{cartaArrematacao, matriculaConsolidada, contratoScp}
-   * - formato antigo: params.cartaArrematacao / params.matriculaConsolidada / params.contratoScp
-   */
   const docs = useMemo(() => {
     const d = params?.documents ?? {};
     return {
       cartaArrematacao: d.cartaArrematacao ?? params?.cartaArrematacao ?? "",
-      matriculaConsolidada: d.matriculaConsolidada ?? params?.matriculaConsolidada ?? "",
+      matriculaConsolidada:
+        d.matriculaConsolidada ?? params?.matriculaConsolidada ?? "",
       contratoScp: d.contratoScp ?? params?.contratoScp ?? "",
     };
   }, [params]);
@@ -65,9 +86,12 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
   const matriculaUrl = normalizeUrl(docs.matriculaConsolidada);
   const contratoScpUrl = normalizeUrl(docs.contratoScp);
 
-  // ✅ LOG rápido para teste
   console.log("🧩 [OperationDetails] docs =", docs);
-  console.log("🧩 [OperationDetails] urls =", { cartaUrl, matriculaUrl, contratoScpUrl });
+  console.log("🧩 [OperationDetails] urls =", {
+    cartaUrl,
+    matriculaUrl,
+    contratoScpUrl,
+  });
 
   const estimatedTermLabel =
     params.estimatedTerm && params.estimatedTerm !== ""
@@ -80,41 +104,122 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
       : "—";
 
   const roiRaw = Number(params.roi ?? 0);
-  const roiPercent = roiRaw < 1 ? roiRaw * 100 : roiRaw;
+  const roiExpectedPercent = roiRaw < 1 ? roiRaw * 100 : roiRaw;
 
-  const amountInvestedValue = Number(params.amountInvested ?? 0);
+  const operation = useMemo(
+    () => ({
+      id: operationId,
+      name: params.name ?? params.propertyName ?? "Operação",
+      city: params.city ?? "Cidade",
+      state: params.state ?? "UF",
+      status:
+        statusParam === "em_andamento"
+          ? "Em andamento"
+          : statusParam === "concluida"
+          ? "Concluída"
+          : "Em andamento",
+      estimatedTerm: estimatedTermLabel,
+      realizedTerm: realizedTermLabel,
+      totalCosts: Number(params.totalCosts ?? 0),
+    }),
+    [
+      operationId,
+      params.name,
+      params.propertyName,
+      params.city,
+      params.state,
+      params.totalCosts,
+      statusParam,
+      estimatedTermLabel,
+      realizedTermLabel,
+    ]
+  );
 
-  const expectedReturnValue =
-    amountInvestedValue && roiPercent
-      ? amountInvestedValue * (roiPercent / 100)
-      : 0;
+  /**
+   * ✅ Resumo financeiro (backend)
+   */
+  const [loadingFinance, setLoadingFinance] = useState(false);
+  const [amountInvested, setAmountInvested] = useState<number>(0);
+  const [expectedProfit, setExpectedProfit] = useState<number>(0);
+  const [realizedProfit, setRealizedProfit] = useState<number>(0);
+  const [realizedRoiPercent, setRealizedRoiPercent] = useState<number>(0);
 
-  const operation = {
-    id: params.id ?? "",
-    name: params.name ?? params.propertyName ?? "Operação",
-    city: params.city ?? "Cidade",
-    state: params.state ?? "UF",
-    status:
-      statusParam === "em_andamento"
-        ? "Em andamento"
-        : statusParam === "concluida"
-        ? "Concluída"
-        : "Em andamento",
-    amountInvested: amountInvestedValue,
-    expectedReturn: expectedReturnValue,
-    realizedProfit: Number(params.realizedProfit ?? 0),
-    roi: roiPercent,
-    estimatedTerm: estimatedTermLabel,
-    realizedTerm: realizedTermLabel,
-    totalCosts: Number(params.totalCosts ?? 0),
-  };
+  useEffect(() => {
+    if (!validOperationId) {
+      setLoadingFinance(false);
+      return;
+    }
 
-  const realizedRoi =
-    isFinished && operation.amountInvested > 0
-      ? (operation.realizedProfit / operation.amountInvested) * 100
-      : 0;
+    setLoadingFinance(true);
+
+    api
+      .get(`/operation-financial/${operation.id}`, {
+        params: { roi_expected: roiExpectedPercent },
+        timeout: 30000,
+      })
+      .then((res) => {
+        const d = res.data ?? {};
+        console.log("🟩 [OperationDetails] financial =", d);
+
+        setAmountInvested(Number(d.amountInvested ?? 0));
+        setExpectedProfit(Number(d.expectedProfit ?? 0));
+        setRealizedProfit(Number(d.realizedProfit ?? 0));
+        setRealizedRoiPercent(Number(d.realizedRoiPercent ?? 0));
+      })
+      .catch((err) => {
+        console.log(
+          "❌ [OperationDetails] erro resumo financeiro",
+          err?.response?.status,
+          err?.response?.data,
+          err?.message ?? err
+        );
+      })
+      .finally(() => setLoadingFinance(false));
+  }, [validOperationId, operation.id, roiExpectedPercent]);
+
+  /**
+   * ✅ Total de custos (igual OperationCosts)
+   */
+  const [totalCosts, setTotalCosts] = useState<number>(operation.totalCosts);
+  const [loadingCosts, setLoadingCosts] = useState(false);
+
+  // ✅ se mudar de operação, sincroniza o estado com o valor inicial
+  useEffect(() => {
+    setTotalCosts(operation.totalCosts);
+  }, [operation.totalCosts, operation.id]);
+
+  useEffect(() => {
+    if (!validOperationId) {
+      setLoadingCosts(false);
+      return;
+    }
+
+    setLoadingCosts(true);
+
+    api
+      .get(`/operation-costs/${operation.id}`, { timeout: 30000 })
+      .then((res) => {
+        setTotalCosts(Number(res.data?.totalCosts ?? 0));
+      })
+      .catch((err) => {
+        console.log(
+          "❌ [OperationDetails] erro ao buscar totalCosts",
+          err?.response?.status,
+          err?.response?.data,
+          err?.message ?? err
+        );
+      })
+      .finally(() => setLoadingCosts(false));
+  }, [validOperationId, operation.id]);
 
   function goToTimeline() {
+    if (!validOperationId) {
+      Alert.alert(
+        "Operação inválida",
+        "O ID da operação chegou inválido. Volte e abra novamente a operação."
+      );
+      return;
+    }
     navigation.navigate("OperationTimeline" as never, {
       id: String(operation.id),
       name: String(operation.name),
@@ -123,6 +228,13 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
   }
 
   function goToCosts() {
+    if (!validOperationId) {
+      Alert.alert(
+        "Operação inválida",
+        "O ID da operação chegou inválido. Volte e abra novamente a operação."
+      );
+      return;
+    }
     navigation.navigate("OperationCosts" as never, {
       id: String(operation.id),
       name: String(operation.name),
@@ -153,6 +265,20 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
           <Text style={styles.headerTitle}>Detalhes</Text>
           <View style={{ width: 70 }} />
         </View>
+
+        {/* Aviso se o ID vier errado */}
+        {!validOperationId && (
+          <View style={styles.warnBox}>
+            <Text style={styles.warnTitle}>ID da operação inválido</Text>
+            <Text style={styles.warnText}>
+              O app recebeu um ID inválido. Por isso, os dados não serão
+              carregados.
+            </Text>
+            <Text style={styles.warnText}>
+              ID recebido: {String(operation.id)}
+            </Text>
+          </View>
+        )}
 
         {/* Cabeçalho */}
         <View style={styles.header}>
@@ -216,7 +342,9 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>Valor investido</Text>
               <Text style={styles.metricValue}>
-                {formatCurrency(operation.amountInvested)}
+                {loadingFinance
+                  ? "Carregando..."
+                  : formatCurrency(amountInvested)}
               </Text>
             </View>
           </View>
@@ -225,14 +353,16 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>Lucro esperado</Text>
               <Text style={styles.metricValue}>
-                {formatCurrency(operation.expectedReturn)}
+                {loadingFinance
+                  ? "Carregando..."
+                  : formatCurrency(expectedProfit)}
               </Text>
             </View>
 
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>ROI % esperado</Text>
               <Text style={styles.metricValue}>
-                {`${operation.roi.toFixed(1)}%`}
+                {`${roiExpectedPercent.toFixed(1)}%`}
               </Text>
             </View>
           </View>
@@ -241,14 +371,22 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>Lucro realizado</Text>
               <Text style={styles.metricValue}>
-                {isFinished ? formatCurrency(operation.realizedProfit) : "—"}
+                {loadingFinance
+                  ? "Carregando..."
+                  : isFinished
+                  ? formatCurrency(realizedProfit)
+                  : "—"}
               </Text>
             </View>
 
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>ROI % realizado</Text>
               <Text style={styles.metricValue}>
-                {isFinished && realizedRoi > 0 ? `${realizedRoi.toFixed(1)}%` : "—"}
+                {loadingFinance
+                  ? "Carregando..."
+                  : isFinished
+                  ? `${realizedRoiPercent.toFixed(1)}%`
+                  : "—"}
               </Text>
             </View>
           </View>
@@ -265,7 +403,7 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
           >
             <Text style={styles.metricLabel}>Total de custos</Text>
             <Text style={styles.metricValue}>
-              {formatCurrency(operation.totalCosts)}
+              {loadingCosts ? "Carregando..." : formatCurrency(totalCosts)}
             </Text>
             <Text style={styles.costHint}>Ver custos detalhados →</Text>
           </TouchableOpacity>
@@ -287,7 +425,9 @@ export function OperationDetailsScreen({ navigation, route }: Props) {
             <DocRow
               label="Matrícula consolidada"
               available={!!matriculaUrl}
-              onPress={() => handleOpenDoc(matriculaUrl, "Matrícula consolidada")}
+              onPress={() =>
+                handleOpenDoc(matriculaUrl, "Matrícula consolidada")
+              }
             />
 
             <View style={styles.docDivider} />
@@ -337,12 +477,14 @@ function DocRow({
 }
 
 function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return Number(value || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: MAIN_BLUE },
-
   content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
 
   headerRow: {
@@ -354,6 +496,20 @@ const styles = StyleSheet.create({
   backBtn: { width: 70, paddingVertical: 6 },
   backText: { color: "#8AB4FF", fontSize: 13, fontWeight: "700" },
   headerTitle: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+
+  warnBox: {
+    backgroundColor: "#5b2a2a",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  warnTitle: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 6,
+  },
+  warnText: { color: "#fff", fontSize: 12, opacity: 0.95 },
 
   header: { marginBottom: 16 },
   title: { fontSize: 22, color: "#FFFFFF", fontWeight: "600" },

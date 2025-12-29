@@ -6,10 +6,9 @@ import { AppStackParamList } from "../types";
 
 import { HomeScreen } from "../../screens/HomeScreen";
 import { OperationsScreen } from "../../screens/OperationsScreen";
-import { OperationDetailsScreen } from "../../screens/OperationDetailsScreen";
+import OperationDetailsScreen from "../../screens/OperationDetailsScreen";
 import { NotificationsScreen } from "../../screens/NotificationsScreen";
 
-// ✅ placeholders (ou suas telas reais quando você me mandar o antigo)
 import { OperationTimelineScreen } from "../../screens/OperationTimelineScreen";
 import { OperationCostsScreen } from "../../screens/OperationCostsScreen";
 
@@ -23,9 +22,10 @@ export function AppNavigator({ onLogout }: { onLogout: () => Promise<void> }) {
       </Stack.Screen>
 
       <Stack.Screen name="Operations" component={OperationsScreen} />
+
+      {/* ✅ IMPORTANTE: OperationDetails usa DEFAULT export (sem chaves) */}
       <Stack.Screen name="OperationDetails" component={OperationDetailsScreen} />
 
-      {/* ✅ NOVAS */}
       <Stack.Screen name="OperationTimeline" component={OperationTimelineScreen} />
       <Stack.Screen name="OperationCosts" component={OperationCostsScreen} />
 
