@@ -16,6 +16,9 @@ import { api } from "../services/api";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/types";
 
+import { cacheGet, getOrFetch } from "../cache/memoryCache";
+import { CACHE_KEYS } from "../cache/cacheKeys";
+
 const MAIN_BLUE = "#0E2A47";
 
 type Operation = {
@@ -59,82 +62,70 @@ export function OperationsScreen({ navigation }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // ✅ guarda financeiro por operação (mesmo payload da tela de detalhes)
-  const [financialById, setFinancialById] = useState<Record<string, OperationFinancial | undefined>>(
-    {}
-  );
-  const [loadingFinancialIds, setLoadingFinancialIds] = useState<Record<string, boolean>>({});
+  const [financialById, setFinancialById] = useState<
+    Record<string, OperationFinancial | undefined>
+  >({});
+  const [loadingFinancialIds, setLoadingFinancialIds] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     let alive = true;
 
-    async function load() {
-      try {
-        setErrorMsg(null);
-        if (!alive) return;
-        setLoading(true);
-
-        const res = await api.get("/operations");
-        const data = (res.data ?? []) as Operation[];
-
-        if (!alive) return;
-        const ops = Array.isArray(data) ? data : [];
-        setOperations(ops);
-
-        // ✅ após carregar operações, carrega financeiro de cada uma
-        // (sem travar a tela: roda em paralelo)
-        await loadFinancialForOperations(ops, alive);
-      } catch (err: any) {
-        console.log("❌ [OperationsScreen] load error:", err?.message, err?.response?.data);
-        if (!alive) return;
-        setOperations([]);
-        setErrorMsg("Não foi possível carregar as operações do servidor.");
-      } finally {
-        if (!alive) return;
-        setLoading(false);
-      }
-    }
+    // helper: calcula ROI esperado percent para enviar no endpoint
+    const roiToPercent = (roi: any) => {
+      const r = Number(roi ?? 0);
+      return r < 1 ? r * 100 : r;
+    };
 
     async function loadFinancialForOperations(ops: Operation[], stillAlive: boolean) {
-      // não faz nada se não tiver operações
       if (!ops || ops.length === 0) return;
 
-      // marca todos como loading (só os que ainda não carregaram)
+      // marca loading só dos que ainda não tem no state
       const initialLoading: Record<string, boolean> = {};
       ops.forEach((op) => {
         const id = String(op.id);
         if (!financialById[id]) initialLoading[id] = true;
       });
-      if (stillAlive) {
+      if (stillAlive && Object.keys(initialLoading).length > 0) {
         setLoadingFinancialIds((prev) => ({ ...prev, ...initialLoading }));
       }
 
-      // helper: calcula ROI esperado percent para enviar no endpoint
-      const roiToPercent = (roi: any) => {
-        const r = Number(roi ?? 0);
-        return r < 1 ? r * 100 : r;
-      };
-
-      // ✅ roda em paralelo (Promise.all)
-      // Se você tiver muitas operações (50+), a gente coloca um limitador depois.
       await Promise.all(
         ops.map(async (op) => {
           const id = String(op.id);
+
+          // se já tem no state, não refaz
+          if (financialById[id]) {
+            if (stillAlive) {
+              setLoadingFinancialIds((prev) => ({ ...prev, [id]: false }));
+            }
+            return;
+          }
+
           try {
             const roiExpectedPercent = roiToPercent(op.roi);
 
-            const res = await api.get(`/operation-financial/${id}`, {
-              params: { roi_expected: roiExpectedPercent },
-              timeout: 30000,
-            });
+            const fin = await getOrFetch(
+              CACHE_KEYS.OP_FINANCIAL(id),
+              async () => {
+                const res = await api.get(`/operation-financial/${id}`, {
+                  params: { roi_expected: roiExpectedPercent },
+                  timeout: 30000,
+                });
 
-            const d = res.data ?? {};
-            const fin: OperationFinancial = {
-              amountInvested: Number(d.amountInvested ?? 0),
-              expectedProfit: Number(d.expectedProfit ?? 0),
-              realizedProfit: Number(d.realizedProfit ?? 0),
-              realizedRoiPercent: Number(d.realizedRoiPercent ?? 0),
-              roiExpectedPercent: Number(d.roiExpectedPercent ?? roiExpectedPercent ?? 0),
-            };
+                const d = res.data ?? {};
+                const payload: OperationFinancial = {
+                  amountInvested: Number(d.amountInvested ?? 0),
+                  expectedProfit: Number(d.expectedProfit ?? 0),
+                  realizedProfit: Number(d.realizedProfit ?? 0),
+                  realizedRoiPercent: Number(d.realizedRoiPercent ?? 0),
+                  roiExpectedPercent: Number(d.roiExpectedPercent ?? roiExpectedPercent ?? 0),
+                };
+                return payload;
+              }
+              // sem force: usa cache em memória
+            );
 
             if (stillAlive) {
               setFinancialById((prev) => ({ ...prev, [id]: fin }));
@@ -154,6 +145,48 @@ export function OperationsScreen({ navigation }: Props) {
           }
         })
       );
+    }
+
+    async function load() {
+      try {
+        setErrorMsg(null);
+        if (!alive) return;
+
+        // ✅ 1) Mostra cache IMEDIATO (sem TriadeLoading piscando)
+        const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
+        if (cachedOps && cachedOps.length > 0 && alive) {
+          setOperations(cachedOps);
+          setLoading(false); // evita tela inteira de loading
+          // carrega financial em background (também com cache)
+          loadFinancialForOperations(cachedOps, alive);
+        } else {
+          setLoading(true);
+        }
+
+        // ✅ 2) Garante dados (cache ou servidor)
+        const ops = await getOrFetch(
+          CACHE_KEYS.OPERATIONS,
+          async () => {
+            const res = await api.get("/operations");
+            const data = (res.data ?? []) as Operation[];
+            return Array.isArray(data) ? data : [];
+          }
+        );
+
+        if (!alive) return;
+        setOperations(ops);
+
+        // mantém seu comportamento atual
+        await loadFinancialForOperations(ops, alive);
+      } catch (err: any) {
+        console.log("❌ [OperationsScreen] load error:", err?.message, err?.response?.data);
+        if (!alive) return;
+        setOperations([]);
+        setErrorMsg("Não foi possível carregar as operações do servidor.");
+      } finally {
+        if (!alive) return;
+        setLoading(false);
+      }
     }
 
     load();
@@ -180,8 +213,6 @@ export function OperationsScreen({ navigation }: Props) {
     const id = String(op.id);
     const fin = financialById[id];
 
-    // ✅ mandamos também os valores já calculados (mesmos da tela de detalhes)
-    // A tela de detalhes ainda pode revalidar no backend (o que ela já faz), mas assim já chega preenchido.
     navigation.navigate("OperationDetails", {
       id,
       name: String(op.propertyName ?? op.name ?? ""),
@@ -190,7 +221,6 @@ export function OperationsScreen({ navigation }: Props) {
       status: String(op.status ?? ""),
       roi: String(roiRaw),
 
-      // agora vem do endpoint financeiro (se existir)
       amountInvested: String(fin?.amountInvested ?? op.amountInvested ?? op.totalInvestment ?? 0),
       expectedProfit: String(fin?.expectedProfit ?? 0),
       realizedProfit: String(fin?.realizedProfit ?? op.realizedProfit ?? op.netProfit ?? 0),
@@ -299,22 +329,18 @@ function OperationCard({
   const roiRaw = Number(operation.roi ?? 0);
   const roiPercentExpected = roiRaw < 1 ? roiRaw * 100 : roiRaw;
 
-  // ✅ agora é SEMPRE o mesmo valor do detalhe (endpoint /operation-financial)
   const amount =
     Number(financial?.amountInvested) ||
     Number(operation.amountInvested ?? operation.totalInvestment ?? 0);
 
-  // ✅ lucro esperado idem detalhe
   const expectedProfit =
     Number(financial?.expectedProfit) ||
     (amount > 0 ? amount * (roiPercentExpected / 100) : 0);
 
-  // ✅ lucro realizado idem detalhe
   const realizedProfit =
     Number(financial?.realizedProfit) ||
     Number(operation.realizedProfit ?? operation.netProfit ?? 0);
 
-  // ✅ ROI realizado idem detalhe
   const roiRealized =
     Number(financial?.realizedRoiPercent) ||
     (!isActive && amount > 0 ? (realizedProfit / amount) * 100 : 0);

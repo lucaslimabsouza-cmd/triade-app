@@ -14,6 +14,9 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/types";
 import { api } from "../services/api";
 
+import { cacheGet, getOrFetch } from "../cache/memoryCache";
+import { CACHE_KEYS } from "../cache/cacheKeys";
+
 const MAIN_BLUE = "#0E2A47";
 
 type CategoryItem = {
@@ -56,6 +59,27 @@ export function OperationCostsScreen({ navigation, route }: Props) {
   useEffect(() => {
     let alive = true;
 
+    async function fetchCostsFromApi(safeId: string) {
+      console.log("➡️ [OperationCosts] GET /operation-costs/:operationId", safeId);
+
+      let res;
+      try {
+        res = await api.get(`/operation-costs/${encodeURIComponent(safeId)}`);
+      } catch (e: any) {
+        const status = e?.response?.status;
+        if (status === 404) {
+          console.log(
+            "⚠️ [OperationCosts] 404 na rota nova. Tentando rota antiga /operations/:id/costs"
+          );
+          res = await api.get(`/operations/${encodeURIComponent(safeId)}/costs`);
+        } else {
+          throw e;
+        }
+      }
+
+      return (res?.data ?? {}) as OperationCostsApiResponse;
+    }
+
     async function loadCosts() {
       const rawId = String(id ?? "");
       const safeId = rawId.replace(/--+/g, "-").trim(); // ✅ FIX2: remove hífens duplicados
@@ -67,34 +91,38 @@ export function OperationCostsScreen({ navigation, route }: Props) {
         return;
       }
 
+      console.log("🧩 [OperationCosts] rawId =", rawId);
+      console.log("🧩 [OperationCosts] safeId =", safeId);
+
+      const cacheKey = CACHE_KEYS.OP_COSTS(safeId);
+
       try {
         if (!alive) return;
         setErrorMsg(null);
-        setLoading(true);
 
-        console.log("🧩 [OperationCosts] rawId =", rawId);
-        console.log("🧩 [OperationCosts] safeId =", safeId);
+        // ✅ 1) preenche instantâneo do cache (sem spinner se tiver)
+        const cached = cacheGet<OperationCostsApiResponse>(cacheKey);
+        if (cached) {
+          if (!alive) return;
 
-        // ✅ Rota nova (preferida)
-        console.log("➡️ [OperationCosts] GET /operation-costs/:operationId", safeId);
+          setTotalCosts(
+            typeof cached.totalCosts === "number" ? cached.totalCosts : initialTotal
+          );
+          setExcludedTotal(
+            typeof cached.excludedTotal === "number" ? cached.excludedTotal : null
+          );
+          setCategories(Array.isArray(cached.categories) ? cached.categories : []);
+          setOpenCategoryCode(null);
 
-        let res;
-        try {
-          res = await api.get(`/operation-costs/${encodeURIComponent(safeId)}`);
-        } catch (e: any) {
-          // ✅ fallback durante transição: se rota nova não existe, tenta a antiga
-          const status = e?.response?.status;
-          if (status === 404) {
-            console.log("⚠️ [OperationCosts] 404 na rota nova. Tentando rota antiga /operations/:id/costs");
-            res = await api.get(`/operations/${encodeURIComponent(safeId)}/costs`);
-          } else {
-            throw e;
-          }
+          setLoading(false);
+        } else {
+          setLoading(true);
         }
 
-        const data = (res?.data ?? {}) as OperationCostsApiResponse;
-
-        console.log("✅ [OperationCosts] response:", data);
+        // ✅ 2) garante dados (cache ou servidor) e atualiza
+        const data = await getOrFetch(cacheKey, async () => {
+          return await fetchCostsFromApi(safeId);
+        });
 
         if (!alive) return;
 
@@ -103,7 +131,12 @@ export function OperationCostsScreen({ navigation, route }: Props) {
         setCategories(Array.isArray(data.categories) ? data.categories : []);
         setOpenCategoryCode(null);
       } catch (err: any) {
-        console.log("❌ [OperationCosts] load error:", err?.message, err?.response?.status, err?.response?.data);
+        console.log(
+          "❌ [OperationCosts] load error:",
+          err?.message,
+          err?.response?.status,
+          err?.response?.data
+        );
         if (!alive) return;
         setErrorMsg("Não foi possível carregar os custos detalhados.");
       } finally {
@@ -117,7 +150,7 @@ export function OperationCostsScreen({ navigation, route }: Props) {
     return () => {
       alive = false;
     };
-  }, [id]);
+  }, [id, initialTotal]);
 
   const sortedCategories = useMemo(() => {
     const list = [...(categories ?? [])];

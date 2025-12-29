@@ -15,6 +15,9 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/types";
 import { api } from "../services/api";
 
+import { cacheGet, getOrFetch } from "../cache/memoryCache";
+import { CACHE_KEYS } from "../cache/cacheKeys";
+
 const MAIN_BLUE = "#0E2A47";
 
 function normalizeUrl(u?: string | null) {
@@ -52,7 +55,7 @@ type Props = NativeStackScreenProps<AppStackParamList, "OperationDetails">;
 function OperationDetailsScreen({ navigation, route }: Props) {
   const params = route.params as any;
 
-  // ✅ pega um UUID "limpo" (sem normalizar dígitos, sem replace)
+  // ✅ pega um UUID "limpo"
   const operationId = useMemo(() => {
     const raw = String(
       params?.id ??
@@ -150,15 +153,35 @@ function OperationDetailsScreen({ navigation, route }: Props) {
       return;
     }
 
-    setLoadingFinance(true);
+    const key = CACHE_KEYS.OP_FINANCIAL(operation.id, roiExpectedPercent);
 
-    api
-      .get(`/operation-financial/${operation.id}`, {
-        params: { roi_expected: roiExpectedPercent },
-        timeout: 30000,
-      })
-      .then((res) => {
-        const d = res.data ?? {};
+    // ✅ 1) preenche instantâneo do cache
+    const cached = cacheGet<any>(key);
+    if (cached) {
+      setAmountInvested(Number(cached.amountInvested ?? 0));
+      setExpectedProfit(Number(cached.expectedProfit ?? 0));
+      setRealizedProfit(Number(cached.realizedProfit ?? 0));
+      setRealizedRoiPercent(Number(cached.realizedRoiPercent ?? 0));
+      setLoadingFinance(false);
+    } else {
+      setLoadingFinance(true);
+    }
+
+    let alive = true;
+
+    // ✅ 2) atualiza por trás (cache ou servidor)
+    getOrFetch(
+      key,
+      async () => {
+        const res = await api.get(`/operation-financial/${operation.id}`, {
+          params: { roi_expected: roiExpectedPercent },
+          timeout: 30000,
+        });
+        return res.data ?? {};
+      }
+    )
+      .then((d) => {
+        if (!alive) return;
         console.log("🟩 [OperationDetails] financial =", d);
 
         setAmountInvested(Number(d.amountInvested ?? 0));
@@ -174,7 +197,14 @@ function OperationDetailsScreen({ navigation, route }: Props) {
           err?.message ?? err
         );
       })
-      .finally(() => setLoadingFinance(false));
+      .finally(() => {
+        if (!alive) return;
+        setLoadingFinance(false);
+      });
+
+    return () => {
+      alive = false;
+    };
   }, [validOperationId, operation.id, roiExpectedPercent]);
 
   /**
@@ -194,12 +224,29 @@ function OperationDetailsScreen({ navigation, route }: Props) {
       return;
     }
 
-    setLoadingCosts(true);
+    const key = CACHE_KEYS.OP_COSTS(operation.id);
 
-    api
-      .get(`/operation-costs/${operation.id}`, { timeout: 30000 })
-      .then((res) => {
-        setTotalCosts(Number(res.data?.totalCosts ?? 0));
+    // ✅ 1) preenche instantâneo do cache
+    const cached = cacheGet<any>(key);
+    if (cached && typeof cached.totalCosts !== "undefined") {
+      setTotalCosts(Number(cached.totalCosts ?? 0));
+      setLoadingCosts(false);
+    } else {
+      setLoadingCosts(true);
+    }
+
+    let alive = true;
+
+    getOrFetch(
+      key,
+      async () => {
+        const res = await api.get(`/operation-costs/${operation.id}`, { timeout: 30000 });
+        return res.data ?? {};
+      }
+    )
+      .then((d) => {
+        if (!alive) return;
+        setTotalCosts(Number(d?.totalCosts ?? 0));
       })
       .catch((err) => {
         console.log(
@@ -209,7 +256,14 @@ function OperationDetailsScreen({ navigation, route }: Props) {
           err?.message ?? err
         );
       })
-      .finally(() => setLoadingCosts(false));
+      .finally(() => {
+        if (!alive) return;
+        setLoadingCosts(false);
+      });
+
+    return () => {
+      alive = false;
+    };
   }, [validOperationId, operation.id]);
 
   function goToTimeline() {
@@ -274,9 +328,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
               O app recebeu um ID inválido. Por isso, os dados não serão
               carregados.
             </Text>
-            <Text style={styles.warnText}>
-              ID recebido: {String(operation.id)}
-            </Text>
+            <Text style={styles.warnText}>ID recebido: {String(operation.id)}</Text>
           </View>
         )}
 
@@ -342,9 +394,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>Valor investido</Text>
               <Text style={styles.metricValue}>
-                {loadingFinance
-                  ? "Carregando..."
-                  : formatCurrency(amountInvested)}
+                {loadingFinance ? "Carregando..." : formatCurrency(amountInvested)}
               </Text>
             </View>
           </View>
@@ -353,17 +403,13 @@ function OperationDetailsScreen({ navigation, route }: Props) {
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>Lucro esperado</Text>
               <Text style={styles.metricValue}>
-                {loadingFinance
-                  ? "Carregando..."
-                  : formatCurrency(expectedProfit)}
+                {loadingFinance ? "Carregando..." : formatCurrency(expectedProfit)}
               </Text>
             </View>
 
             <View style={styles.metricCard}>
               <Text style={styles.metricLabel}>ROI % esperado</Text>
-              <Text style={styles.metricValue}>
-                {`${roiExpectedPercent.toFixed(1)}%`}
-              </Text>
+              <Text style={styles.metricValue}>{`${roiExpectedPercent.toFixed(1)}%`}</Text>
             </View>
           </View>
 
@@ -425,9 +471,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
             <DocRow
               label="Matrícula consolidada"
               available={!!matriculaUrl}
-              onPress={() =>
-                handleOpenDoc(matriculaUrl, "Matrícula consolidada")
-              }
+              onPress={() => handleOpenDoc(matriculaUrl, "Matrícula consolidada")}
             />
 
             <View style={styles.docDivider} />

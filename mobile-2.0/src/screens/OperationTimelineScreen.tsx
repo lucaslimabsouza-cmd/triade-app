@@ -13,12 +13,15 @@ import { AppStackParamList } from "../navigation/types";
 
 import { api } from "../services/api";
 
+import { cacheGet, getOrFetch } from "../cache/memoryCache";
+import { CACHE_KEYS } from "../cache/cacheKeys";
+
 const MAIN_BLUE = "#0E2A47";
 
 type OperationFromApi = {
   id: string;
-  propertyName?: string; // <- o /operations normalizado vem com propertyName
-  name?: string; // <- fallback
+  propertyName?: string;
+  name?: string;
   city?: string;
   state?: string;
   status?: string;
@@ -50,45 +53,62 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
   useEffect(() => {
     let alive = true;
 
+    function pickFromList(list: OperationFromApi[] | any) {
+      const found = Array.isArray(list)
+        ? list.find((op) => String(op.id) === String(id))
+        : null;
+
+      console.log("🧩 [Timeline] route.params =", params);
+      console.log(
+        "🧩 [Timeline] /operations count =",
+        Array.isArray(list) ? list.length : "not-array"
+      );
+      console.log("🧩 [Timeline] looking for id =", id);
+      console.log("🧩 [Timeline] found =", found);
+
+      if (!found) {
+        setOperation(null);
+        setErrorMsg("Operação não encontrada no /operations.");
+        return;
+      }
+
+      setOperation(found);
+
+      console.log("🧩 [Timeline] operation dates:", {
+        auction_date: found.auction_date,
+        itbi_date: found.itbi_date,
+        deed_date: found.deed_date,
+        registry_date: found.registry_date,
+        vacancy_date: found.vacancy_date,
+        construction_date: found.construction_date,
+        listed_to_broker_date: found.listed_to_broker_date,
+        sale_contract_date: found.sale_contract_date,
+        sale_receipt_date: found.sale_receipt_date,
+      });
+    }
+
     (async () => {
       try {
         setErrorMsg(null);
-        setLoading(true);
 
-        // ✅ CERTO: pega /operations (que já vem com as datas)
-        const res = await api.get("/operations");
-        const list = (res.data ?? []) as OperationFromApi[];
-
-        const found = Array.isArray(list)
-          ? list.find((op) => String(op.id) === String(id))
-          : null;
-
-        if (!alive) return;
-
-        console.log("🧩 [Timeline] route.params =", params);
-        console.log("🧩 [Timeline] /operations count =", Array.isArray(list) ? list.length : "not-array");
-        console.log("🧩 [Timeline] looking for id =", id);
-        console.log("🧩 [Timeline] found =", found);
-
-        if (!found) {
-          setOperation(null);
-          setErrorMsg("Operação não encontrada no /operations.");
-          return;
+        // ✅ 1) tenta cache instantâneo
+        const cachedList = cacheGet<OperationFromApi[]>(CACHE_KEYS.OPERATIONS);
+        if (cachedList && cachedList.length > 0) {
+          if (!alive) return;
+          setLoading(false);
+          pickFromList(cachedList);
+        } else {
+          setLoading(true);
         }
 
-        setOperation(found);
-
-        console.log("🧩 [Timeline] operation dates:", {
-          auction_date: found.auction_date,
-          itbi_date: found.itbi_date,
-          deed_date: found.deed_date,
-          registry_date: found.registry_date,
-          vacancy_date: found.vacancy_date,
-          construction_date: found.construction_date,
-          listed_to_broker_date: found.listed_to_broker_date,
-          sale_contract_date: found.sale_contract_date,
-          sale_receipt_date: found.sale_receipt_date,
+        // ✅ 2) garante lista (cache ou servidor) e atualiza
+        const list = await getOrFetch(CACHE_KEYS.OPERATIONS, async () => {
+          const res = await api.get("/operations");
+          return (res.data ?? []) as OperationFromApi[];
         });
+
+        if (!alive) return;
+        pickFromList(list);
       } catch (err: any) {
         if (!alive) return;
         console.log("❌ [Timeline] load error:", err?.response?.data ?? err?.message);
@@ -103,6 +123,7 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const statusLabel =
@@ -122,7 +143,11 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
       { key: "registry_date", label: "Registro em matrícula", value: op?.registry_date },
       { key: "vacancy_date", label: "Desocupação", value: op?.vacancy_date },
       { key: "construction_date", label: "Obra / reforma", value: op?.construction_date },
-      { key: "listed_to_broker_date", label: "Disponibilizado para imobiliária", value: op?.listed_to_broker_date },
+      {
+        key: "listed_to_broker_date",
+        label: "Disponibilizado para imobiliária",
+        value: op?.listed_to_broker_date,
+      },
       { key: "sale_contract_date", label: "Contrato de venda", value: op?.sale_contract_date },
       { key: "sale_receipt_date", label: "Recebimento da venda", value: op?.sale_receipt_date },
     ];
@@ -156,7 +181,9 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
         {/* Cabeçalho */}
         <View style={styles.header}>
           <Text style={styles.title}>Linha do tempo</Text>
-          <Text style={styles.subtitle}>Acompanhe as principais etapas dessa operação.</Text>
+          <Text style={styles.subtitle}>
+            Acompanhe as principais etapas dessa operação.
+          </Text>
         </View>
 
         {/* Card principal */}
@@ -201,7 +228,6 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
 
               return (
                 <View key={step.key} style={styles.timelineRow}>
-                  {/* Bolinha + linha */}
                   <View style={styles.timelineIndicatorColumn}>
                     <View
                       style={[
@@ -220,7 +246,6 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
                     )}
                   </View>
 
-                  {/* Texto */}
                   <View style={styles.timelineTextColumn}>
                     <Text style={styles.stepLabel}>{step.label}</Text>
                     <Text style={styles.stepDate}>

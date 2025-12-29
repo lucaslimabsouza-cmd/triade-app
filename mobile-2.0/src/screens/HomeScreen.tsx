@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 
@@ -9,6 +9,9 @@ import TriadeLoading from "../ui/TriadeLoading";
 import { api } from "../services/api";
 import { lastLoginStorage } from "../storage/lastLoginStorage";
 
+import { cacheGet, getOrFetch } from "../cache/memoryCache";
+import { CACHE_KEYS } from "../cache/cacheKeys";
+
 type Operation = {
   id: string | number;
   status?: string;
@@ -17,6 +20,14 @@ type Operation = {
   realizedProfit?: number;
   netProfit?: number;
   roi?: number;
+};
+
+type OperationFinancial = {
+  amountInvested: number;
+  expectedProfit: number;
+  realizedProfit: number;
+  realizedRoiPercent: number;
+  roiExpectedPercent: number;
 };
 
 type NotificationItem = {
@@ -33,6 +44,33 @@ type Props = NativeStackScreenProps<AppStackParamList, "Home"> & {
   onLogout: () => Promise<void>;
 };
 
+function firstNameFromFullName(fullName?: string) {
+  const s = String(fullName ?? "").trim();
+  if (!s) return "";
+  return s.split(/\s+/)[0] ?? "";
+}
+
+function roiToPercent(roi: any) {
+  const r = Number(roi ?? 0);
+  return r < 1 ? r * 100 : r;
+}
+
+function capitalizeFirstName(name?: string) {
+  const s = String(name ?? "").trim();
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+function buildFinancialFromApi(d: any, fallbackRoiExpectedPercent: number): OperationFinancial {
+  return {
+    amountInvested: Number(d?.amountInvested ?? 0),
+    expectedProfit: Number(d?.expectedProfit ?? 0),
+    realizedProfit: Number(d?.realizedProfit ?? 0),
+    realizedRoiPercent: Number(d?.realizedRoiPercent ?? 0),
+    roiExpectedPercent: Number(d?.roiExpectedPercent ?? fallbackRoiExpectedPercent ?? 0),
+  };
+}
+
 export function HomeScreen({ navigation, onLogout }: Props) {
   const [operations, setOperations] = useState<Operation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,33 +78,202 @@ export function HomeScreen({ navigation, onLogout }: Props) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loadingNotifs, setLoadingNotifs] = useState(true);
 
+  const [firstName, setFirstName] = useState<string>("");
+
+  const [financialById, setFinancialById] = useState<Record<string, OperationFinancial | undefined>>(
+    {}
+  );
+  const [loadingFinancial, setLoadingFinancial] = useState(false);
+
+  /**
+   * 1) /me (cache em memória, não trava a tela)
+   */
   useEffect(() => {
     let alive = true;
 
-    async function load() {
+    async function loadMe() {
       try {
-        if (!alive) return;
-        setLoading(true);
+        // ✅ 1) prefill instantâneo do cache
+        const cached = cacheGet<any>(CACHE_KEYS.ME);
+        if (cached) {
+          const party = cached.party ?? {};
+          const fn =
+            String(party.firstName ?? cached.firstName ?? "").trim() ||
+            firstNameFromFullName(String(party.name ?? cached.fullName ?? "").trim());
 
-        const res = await api.get("/operations");
-        const data = (res.data ?? []) as Operation[];
+          if (alive) setFirstName(fn);
+        }
+
+        // ✅ 2) atualiza em background (cache ou servidor)
+        const d = await getOrFetch(CACHE_KEYS.ME, async () => {
+          const res = await api.get("/me", { timeout: 15000 });
+          return res.data ?? {};
+        });
+
         if (!alive) return;
-        setOperations(data ?? []);
-      } catch {
+
+        const party = d.party ?? {};
+        const fn =
+          String(party.firstName ?? d.firstName ?? "").trim() ||
+          firstNameFromFullName(String(party.name ?? d.fullName ?? "").trim());
+
+        setFirstName(fn);
+      } catch (err: any) {
+        console.log(
+          "❌ [HomeScreen] erro /me:",
+          err?.response?.status,
+          err?.response?.data,
+          err?.message ?? err
+        );
         if (!alive) return;
-        setOperations([]);
+        setFirstName("");
+      }
+    }
+
+    loadMe();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /**
+   * 2) /operations (cache em memória)
+   * - Se tiver cache, mostra imediatamente e evita spinner.
+   * - Revalida em background.
+   */
+  useEffect(() => {
+    let alive = true;
+
+    async function loadOperations() {
+      try {
+        // ✅ 1) prefill do cache
+        const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
+        if (cachedOps && Array.isArray(cachedOps)) {
+          if (!alive) return;
+          setOperations(cachedOps);
+          setLoading(false);
+        } else {
+          if (!alive) return;
+          setLoading(true);
+        }
+
+        // ✅ 2) garante (cache ou servidor)
+        const ops = await getOrFetch(CACHE_KEYS.OPERATIONS, async () => {
+          const res = await api.get("/operations", { timeout: 30000 });
+          const data = (res.data ?? []) as Operation[];
+          return Array.isArray(data) ? data : [];
+        });
+
+        if (!alive) return;
+        setOperations(ops);
+      } catch (err: any) {
+        console.log("❌ [HomeScreen] /operations error:", err?.message, err?.response?.data);
+        if (!alive) return;
+        // mantém o que tiver em tela; se não tiver nada, zera
+        setOperations((prev) => (prev?.length ? prev : []));
       } finally {
         if (!alive) return;
         setLoading(false);
       }
     }
 
-    load();
+    loadOperations();
     return () => {
       alive = false;
     };
   }, []);
 
+  /**
+   * 3) financeiro por operação (background) + cache
+   * - Preenche instantâneo por op (se cache existir)
+   * - Atualiza em background com limite de concorrência (6)
+   */
+  useEffect(() => {
+    let alive = true;
+
+    async function loadFinancial() {
+      try {
+        if (!operations || operations.length === 0) return;
+
+        // ✅ 1) prefill instantâneo do cache (por operação)
+        const prefill: Record<string, OperationFinancial | undefined> = {};
+        for (const op of operations) {
+          const id = String(op.id).trim();
+          if (!id) continue;
+
+          const roiExpectedPercent = roiToPercent(op.roi);
+          const key = CACHE_KEYS.OP_FINANCIAL(id, roiExpectedPercent);
+          const cached = cacheGet<any>(key);
+          if (cached) {
+            prefill[id] = buildFinancialFromApi(cached, roiExpectedPercent);
+          }
+        }
+
+        if (alive && Object.keys(prefill).length > 0) {
+          setFinancialById((prev) => ({ ...prev, ...prefill }));
+        }
+
+        // ✅ 2) atualiza em background
+        if (!alive) return;
+        setLoadingFinancial(true);
+
+        const results: Record<string, OperationFinancial | undefined> = {};
+        const limit = 6;
+        let idx = 0;
+
+        async function worker() {
+          while (idx < operations.length) {
+            const op = operations[idx++];
+            const id = String(op.id).trim();
+            if (!id) continue;
+
+            const roiExpectedPercent = roiToPercent(op.roi);
+            const key = CACHE_KEYS.OP_FINANCIAL(id, roiExpectedPercent);
+
+            try {
+              const d = await getOrFetch(key, async () => {
+                const finRes = await api.get(`/operation-financial/${id}`, {
+                  params: { roi_expected: roiExpectedPercent },
+                  timeout: 30000,
+                });
+                return finRes.data ?? {};
+              });
+
+              results[id] = buildFinancialFromApi(d, roiExpectedPercent);
+            } catch (err: any) {
+              console.log(
+                "❌ [HomeScreen] erro financeiro",
+                id,
+                err?.response?.status,
+                err?.response?.data,
+                err?.message ?? err
+              );
+              results[id] = undefined;
+            }
+          }
+        }
+
+        await Promise.all(
+          Array.from({ length: Math.min(limit, operations.length) }, () => worker())
+        );
+
+        if (!alive) return;
+        setFinancialById((prev) => ({ ...prev, ...results }));
+      } finally {
+        if (!alive) return;
+        setLoadingFinancial(false);
+      }
+    }
+
+    loadFinancial();
+    return () => {
+      alive = false;
+    };
+  }, [operations]);
+
+  /**
+   * 4) Notificações (cache por CPF)
+   */
   useEffect(() => {
     let alive = true;
 
@@ -82,13 +289,29 @@ export function HomeScreen({ navigation, onLogout }: Props) {
           return;
         }
 
-        const res = await api.get(`/notifications?cpf=${encodeURIComponent(cpf)}`);
-        const data = (res.data ?? []) as NotificationItem[];
+        const key = CACHE_KEYS.NOTIFICATIONS(cpf);
+
+        // ✅ prefill instantâneo
+        const cached = cacheGet<NotificationItem[]>(key);
+        if (cached && Array.isArray(cached)) {
+          if (!alive) return;
+          setNotifications(cached);
+          setLoadingNotifs(false);
+        }
+
+        // ✅ revalida
+        const data = await getOrFetch(key, async () => {
+          const res = await api.get(`/notifications?cpf=${encodeURIComponent(cpf)}`, {
+            timeout: 30000,
+          });
+          return (res.data ?? []) as NotificationItem[];
+        });
+
         if (!alive) return;
-        setNotifications(data ?? []);
+        setNotifications(Array.isArray(data) ? data : []);
       } catch {
         if (!alive) return;
-        setNotifications([]);
+        setNotifications((prev) => (prev?.length ? prev : []));
       } finally {
         if (!alive) return;
         setLoadingNotifs(false);
@@ -101,24 +324,38 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     };
   }, []);
 
-  if (loading) return <TriadeLoading />;
-
+  // ✅ hooks sempre rodam (nada de return antes daqui)
   const totalOperations = operations.length;
   const activeOperations = operations.filter((op) => op.status === "em_andamento").length;
   const finishedOperations = totalOperations - activeOperations;
 
-  const summary = getSummaryFromOperations(operations);
+  const summary = useMemo(() => {
+    return getSummaryFromOperations(operations, financialById);
+  }, [operations, financialById]);
+
   const latestNotifs = (notifications ?? []).slice(0, 1);
+
+  const greetingName = firstName ? capitalizeFirstName(firstName) : "investidor";
+
+  // ✅ só mostra TriadeLoading se ainda não tem nada para renderizar
+  if (loading && operations.length === 0) return <TriadeLoading />;
 
   return (
     <Screen title="Home" onLogout={onLogout} padding={16} contentTopOffset={0}>
       <View style={styles.header}>
-        <Text style={styles.welcomeText}>Olá, investidor</Text>
+        <Text style={styles.welcomeText}>Olá, {greetingName}</Text>
         <Text style={styles.subtitle}>Acompanhe a evolução dos seus investimentos.</Text>
+        {loadingFinancial && (
+          <Text style={styles.helperText}>Atualizando valores financeiros...</Text>
+        )}
       </View>
 
+      {/* Total de investimento: somente em andamento */}
       <View style={styles.metricsRow}>
-        <MetricCard label="Total dos investimentos" value={formatCurrency(summary.totalInvested)} />
+        <MetricCard
+          label="Total dos investimentos"
+          value={formatCurrency(summary.totalInvestedActive)}
+        />
       </View>
 
       <View style={styles.section}>
@@ -142,18 +379,26 @@ export function HomeScreen({ navigation, onLogout }: Props) {
         </TouchableOpacity>
       </View>
 
+      {/* Lucro realizado + ROI médio: somente concluídas */}
       <View style={styles.section}>
         <View style={styles.metricsRow}>
-          <MetricCard label="Lucro realizado" value={formatCurrency(summary.totalRealizedProfit)} />
+          <MetricCard
+            label="Lucro realizado"
+            value={formatCurrency(summary.totalRealizedProfit)}
+          />
           <MetricCard label="ROI médio realizado" value={summary.averageRoi.toFixed(1) + "%"} />
         </View>
       </View>
 
+      {/* Notificações */}
       <View style={styles.section}>
         <View style={styles.notifHeaderRow}>
           <Text style={styles.sectionTitle}>Últimas notificações</Text>
 
-          <TouchableOpacity onPress={() => navigation.navigate("Notifications")} activeOpacity={0.8}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate("Notifications")}
+            activeOpacity={0.8}
+          >
             <Text style={styles.notifLink}>Ver todas →</Text>
           </TouchableOpacity>
         </View>
@@ -192,35 +437,37 @@ export function HomeScreen({ navigation, onLogout }: Props) {
 
 export default HomeScreen;
 
-function getSummaryFromOperations(operations: Operation[]) {
-  if (!operations || operations.length === 0) {
-    return { totalInvested: 0, totalRealizedProfit: 0, averageRoi: 0 };
-  }
-
-  let investedSumAll = 0;
-  let realizedSumAll = 0;
-
-  for (const op of operations) {
-    investedSumAll += Number(op.amountInvested ?? op.totalInvestment ?? 0);
-    realizedSumAll += Number(op.realizedProfit ?? op.netProfit ?? 0);
-  }
-
-  const finishedOps = operations.filter((op) => op.status === "concluida");
+function getSummaryFromOperations(
+  operations: Operation[],
+  financialById: Record<string, OperationFinancial | undefined>
+) {
+  let investedActive = 0;
 
   let investedFinished = 0;
   let realizedFinished = 0;
 
-  for (const op of finishedOps) {
-    investedFinished += Number(op.amountInvested ?? op.totalInvestment ?? 0);
-    realizedFinished += Number(op.realizedProfit ?? op.netProfit ?? 0);
+  for (const op of operations) {
+    const id = String(op.id);
+    const fin = financialById[id];
+
+    const amount = Number(fin?.amountInvested ?? op.amountInvested ?? op.totalInvestment ?? 0);
+    const realized = Number(fin?.realizedProfit ?? op.realizedProfit ?? op.netProfit ?? 0);
+
+    if (op.status === "em_andamento") investedActive += amount;
+
+    if (op.status === "concluida") {
+      investedFinished += amount;
+      realizedFinished += realized;
+    }
   }
 
-  let averageRoi = 0;
-  if (investedFinished > 0) {
-    averageRoi = (realizedFinished / investedFinished) * 100;
-  }
+  const averageRoi = investedFinished > 0 ? (realizedFinished / investedFinished) * 100 : 0;
 
-  return { totalInvested: investedSumAll, totalRealizedProfit: realizedSumAll, averageRoi };
+  return {
+    totalInvestedActive: investedActive,
+    totalRealizedProfit: realizedFinished,
+    averageRoi,
+  };
 }
 
 function MetricCard({ label, value }: { label: string; value: string }) {
@@ -233,13 +480,15 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 }
 
 function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const v = Number.isFinite(value) ? value : 0;
+  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 const styles = StyleSheet.create({
   header: { marginTop: 12, marginBottom: 16 },
   welcomeText: { fontSize: 22, fontWeight: "600", color: "#FFFFFF" },
   subtitle: { fontSize: 14, color: "#D0D7E3" },
+  helperText: { marginTop: 6, fontSize: 12, color: "#C3C9D6" },
 
   metricsRow: { flexDirection: "row", gap: 12, marginBottom: 12 },
   metricCard: { flex: 1, backgroundColor: "#14395E", borderRadius: 12, padding: 12 },
