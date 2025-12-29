@@ -66,9 +66,7 @@ router.post("/admin/set-initial-password", async (req: Request, res: Response) =
     const { data: party, error: partyErr } = await supabaseAdmin
       .from("omie_parties")
       .select("id, name, cpf_cnpj, omie_code")
-      .or(
-        `cpf_cnpj.eq.${rawCpf},cpf_cnpj.eq.${cpfDigits},cpf_cnpj.ilike.%${cpfDigits}%`
-      )
+      .or(`cpf_cnpj.eq.${rawCpf},cpf_cnpj.eq.${cpfDigits},cpf_cnpj.ilike.%${cpfDigits}%`)
       .maybeSingle();
 
     if (partyErr) throw partyErr;
@@ -111,18 +109,12 @@ router.post("/admin/set-initial-password", async (req: Request, res: Response) =
 ========================= */
 /**
  * POST /auth/login
- * Body: { cpf_cnpj, password }
- */
-/**
- * POST /auth/login
  * Body: { cpf_cnpj, cpf, password }
  * (aceita cpf OU cpf_cnpj para compatibilidade com o mobile)
  */
 router.post("/login", async (req: Request, res: Response) => {
   try {
-    const rawCpf = String(
-      req.body?.cpf_cnpj || req.body?.cpf || ""
-    ).trim();
+    const rawCpf = String(req.body?.cpf_cnpj || req.body?.cpf || "").trim();
 
     const cpfDigits = onlyDigits(rawCpf);
     const password = String(req.body?.password || "");
@@ -134,9 +126,7 @@ router.post("/login", async (req: Request, res: Response) => {
     const { data: party, error: partyErr } = await supabaseAdmin
       .from("omie_parties")
       .select("id, name, cpf_cnpj, omie_code")
-      .or(
-        `cpf_cnpj.eq.${rawCpf},cpf_cnpj.eq.${cpfDigits},cpf_cnpj.ilike.%${cpfDigits}%`
-      )
+      .or(`cpf_cnpj.eq.${rawCpf},cpf_cnpj.eq.${cpfDigits},cpf_cnpj.ilike.%${cpfDigits}%`)
       .maybeSingle();
 
     if (partyErr) throw partyErr;
@@ -187,7 +177,6 @@ router.post("/login", async (req: Request, res: Response) => {
   }
 });
 
-
 /* =========================
    TROCAR SENHA (usuário)
 ========================= */
@@ -196,62 +185,61 @@ router.post("/login", async (req: Request, res: Response) => {
  * Header: Authorization Bearer <token>
  * Body: { oldPassword, newPassword }
  */
-router.post(
-  "/change-password",
-  requireAuth,
-  async (req: Request, res: Response) => {
-    try {
-      const user = (req as any).user;
-      const partyId = user?.party_id;
+router.post("/change-password", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const partyId = user?.party_id;
 
-      const oldPassword = String(req.body?.oldPassword || "");
-      const newPassword = String(req.body?.newPassword || "");
+    const oldPassword = String(req.body?.oldPassword || "");
+    const newPassword = String(req.body?.newPassword || "");
 
-      if (!partyId) {
-        return res.status(401).json({ ok: false, error: "Usuário inválido" });
-      }
-
-      if (newPassword.length < 8) {
-        return res.status(400).json({
-          ok: false,
-          error: "Nova senha deve ter no mínimo 8 caracteres",
-        });
-      }
-
-      const { data: authRow, error: authErr } = await supabaseAdmin
-        .from("party_auth")
-        .select("password_hash")
-        .eq("party_id", partyId)
-        .maybeSingle();
-
-      if (authErr) throw authErr;
-      if (!authRow) {
-        return res.status(404).json({ ok: false, error: "Credenciais não encontradas" });
-      }
-
-      const valid = await bcrypt.compare(oldPassword, authRow.password_hash);
-      if (!valid) {
-        return res.status(401).json({ ok: false, error: "Senha atual incorreta" });
-      }
-
-      const password_hash = await bcrypt.hash(newPassword, 12);
-
-      const { error: updErr } = await supabaseAdmin
-        .from("party_auth")
-        .update({
-          password_hash,
-          must_change_password: false,
-        })
-        .eq("party_id", partyId);
-
-      if (updErr) throw updErr;
-
-      return res.json({ ok: true });
-    } catch (err) {
-      console.error("change-password error:", err);
-      return res.status(500).json({ ok: false, error: "Erro interno" });
+    if (!partyId) {
+      return res.status(401).json({ ok: false, error: "Usuário inválido" });
     }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        ok: false,
+        error: "Nova senha deve ter no mínimo 8 caracteres",
+      });
+    }
+
+    const { data: authRow, error: authErr } = await supabaseAdmin
+      .from("party_auth")
+      .select("password_hash")
+      .eq("party_id", partyId)
+      .maybeSingle();
+
+    if (authErr) throw authErr;
+    if (!authRow) {
+      return res.status(404).json({ ok: false, error: "Credenciais não encontradas" });
+    }
+
+    const valid = await bcrypt.compare(oldPassword, authRow.password_hash);
+    if (!valid) {
+      return res.status(401).json({ ok: false, error: "Senha atual incorreta" });
+    }
+
+    const password_hash = await bcrypt.hash(newPassword, 12);
+
+    const { error: updErr } = await supabaseAdmin
+      .from("party_auth")
+      .update({
+        password_hash,
+        must_change_password: false,
+      })
+      .eq("party_id", partyId);
+
+    if (updErr) throw updErr;
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("change-password error:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
   }
-);
+});
+
+// ✅ ESSA LINHA É O QUE FALTAVA (para o me.ts importar)
+export { requireAuth };
 
 export default router;

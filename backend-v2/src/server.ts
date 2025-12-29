@@ -17,6 +17,7 @@ import operationsRouter from "./routes/operations";
 
 import operationCostsRouter from "./routes/operation-costs";
 import operationFinancialRoutes from "./routes/operation-financial";
+import meRouter from "./routes/me"; // ajuste o caminho
 
 
 
@@ -49,6 +50,7 @@ app.use("/auth", authRouter);
 ========================= */
 app.use("/operations", operationsRouter);
 app.use(operationFinancialRoutes);
+app.use(meRouter);
 
 
 app.use("/operation-costs", operationCostsRouter);
