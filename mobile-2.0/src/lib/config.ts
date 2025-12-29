@@ -4,4 +4,4 @@
 
 export const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ??
-  "http://192.168.1.126:4001"; // ✅ ajuste para seu IP quando rodar no celular
+  "http://11.0.3.3:4001"; // ✅ ajuste para seu IP quando rodar no celular

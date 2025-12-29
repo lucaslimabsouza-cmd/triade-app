@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  TouchableOpacity,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/types";
@@ -10,12 +17,13 @@ const MAIN_BLUE = "#0E2A47";
 
 type OperationFromApi = {
   id: string;
-  name?: string;
+  propertyName?: string; // <- o /operations normalizado vem com propertyName
+  name?: string; // <- fallback
   city?: string;
   state?: string;
   status?: string;
 
-  // ✅ datas vindas da tabela operations (snake_case)
+  // ✅ datas vindas do backend (snake_case)
   auction_date?: string | null;
   itbi_date?: string | null;
   deed_date?: string | null;
@@ -30,7 +38,10 @@ type OperationFromApi = {
 type Props = NativeStackScreenProps<AppStackParamList, "OperationTimeline">;
 
 export function OperationTimelineScreen({ navigation, route }: Props) {
-  const { id, name, status } = route.params;
+  const params = route.params as any;
+  const id = String(params.id ?? "");
+  const name = params.name;
+  const status = params.status;
 
   const [operation, setOperation] = useState<OperationFromApi | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,19 +55,24 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
         setErrorMsg(null);
         setLoading(true);
 
-        // ✅ estratégia simples: pega /operations e acha pelo id
-        // (se você criar endpoint /operations/:id depois, eu adapto pra ficar ainda melhor)
-        
-        const res = await api.get(`/operation-costs/${encodeURIComponent(id)}`);
+        // ✅ CERTO: pega /operations (que já vem com as datas)
+        const res = await api.get("/operations");
         const list = (res.data ?? []) as OperationFromApi[];
 
-        const found = Array.isArray(list) ? list.find((op) => String(op.id) === String(id)) : null;
+        const found = Array.isArray(list)
+          ? list.find((op) => String(op.id) === String(id))
+          : null;
 
         if (!alive) return;
 
+        console.log("🧩 [Timeline] route.params =", params);
+        console.log("🧩 [Timeline] /operations count =", Array.isArray(list) ? list.length : "not-array");
+        console.log("🧩 [Timeline] looking for id =", id);
+        console.log("🧩 [Timeline] found =", found);
+
         if (!found) {
           setOperation(null);
-          setErrorMsg("Operação não encontrada.");
+          setErrorMsg("Operação não encontrada no /operations.");
           return;
         }
 
@@ -90,7 +106,11 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
   }, [id]);
 
   const statusLabel =
-    status === "concluida" ? "Concluída" : status === "em_andamento" ? "Em andamento" : "Em andamento";
+    status === "concluida"
+      ? "Concluída"
+      : status === "em_andamento"
+      ? "Em andamento"
+      : "Em andamento";
 
   const steps = useMemo(() => {
     const op = operation;
@@ -108,7 +128,6 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
     ];
   }, [operation]);
 
-  // ✅ último índice concluído (p/ pintar linha)
   const lastDoneIndex = useMemo(() => {
     let last = -1;
     steps.forEach((s, i) => {
@@ -122,7 +141,11 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={styles.content}>
         {/* Header padrão */}
         <View style={styles.headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.8} style={styles.backBtn}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.8}
+            style={styles.backBtn}
+          >
             <Text style={styles.backText}>← Voltar</Text>
           </TouchableOpacity>
 
@@ -138,7 +161,9 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
 
         {/* Card principal */}
         <View style={styles.mainCard}>
-          <Text style={styles.operationName}>{name ?? operation?.name ?? "Operação"}</Text>
+          <Text style={styles.operationName}>
+            {name ?? operation?.propertyName ?? operation?.name ?? "Operação"}
+          </Text>
 
           <View style={styles.statusRow}>
             <View
@@ -198,13 +223,9 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
                   {/* Texto */}
                   <View style={styles.timelineTextColumn}>
                     <Text style={styles.stepLabel}>{step.label}</Text>
-
-                    {/* ✅ aqui NÃO pode retornar "Pendente" */}
                     <Text style={styles.stepDate}>
                       {done ? formatTimelineDate(step.value) : "—"}
                     </Text>
-
-                    {/* ✅ “Pendente” aparece só aqui */}
                     <Text style={styles.stepStatus}>{done ? "Concluído" : "Pendente"}</Text>
                   </View>
                 </View>
@@ -227,18 +248,13 @@ function hasDate(value: any): boolean {
 
 function formatTimelineDate(value: any): string {
   if (!value) return "—";
-
-  // se vier "2025-12-18T..." ou "2025-12-18"
   const d = new Date(value);
   if (!isNaN(d.getTime())) return d.toLocaleDateString("pt-BR");
-
-  // fallback: mostra string bruta
   return String(value);
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: MAIN_BLUE },
-
   content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
 
   headerRow: {
