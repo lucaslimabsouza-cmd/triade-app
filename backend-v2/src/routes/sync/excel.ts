@@ -130,7 +130,8 @@ router.post("/operations", async (_req, res) => {
 
         link_arrematacao: row["Link Carta de arrematação"] ?? null,
         link_matricula: row["Link Matricula consolidada"] ?? null,
-        link_contrato_scp: row["Link Contrato SCP"] ?? null,
+        link_contrato_scp: row["Link Contrato Scp"] ?? null,
+
 
       };
 
