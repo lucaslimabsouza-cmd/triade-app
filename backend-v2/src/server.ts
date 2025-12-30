@@ -21,6 +21,8 @@ import meRouter from "./routes/me"; // ajuste o caminho
 
 
 
+
+
 const app = express();
 
 /* =========================
@@ -51,6 +53,8 @@ app.use("/auth", authRouter);
 app.use("/operations", operationsRouter);
 app.use(operationFinancialRoutes);
 app.use(meRouter);
+
+
 
 
 app.use("/operation-costs", operationCostsRouter);
