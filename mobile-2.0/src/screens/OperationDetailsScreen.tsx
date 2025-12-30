@@ -13,12 +13,16 @@ import {
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/types";
+import { api } from "../services/api";
 
 import { cacheGet, getOrFetch } from "../cache/memoryCache";
 import { CACHE_KEYS } from "../cache/cacheKeys";
-import { getOperationFinancial } from "../cache/financialCache";
 
 const MAIN_BLUE = "#0E2A47";
+
+/* =========================
+   Utils
+========================= */
 
 function normalizeUrl(u?: string | null) {
   const raw = String(u ?? "").trim();
@@ -50,6 +54,44 @@ async function openUrl(url: string) {
   }
 }
 
+function formatCurrency(value: number): string {
+  return Number(value || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
+
+function roiToPercent(roi: any) {
+  const r = Number(roi ?? 0);
+  return r < 1 ? r * 100 : r;
+}
+
+/**
+ * ✅ TotalCosts pode vir com nomes diferentes dependendo do backend.
+ * Esta função tenta vários campos e cai pra 0.
+ */
+function pickTotalCosts(payload: any): number {
+  const d = payload ?? {};
+  const candidates = [
+    d.totalCosts,
+    d.total_costs,
+    d.total,
+    d.sum,
+    d.total_cost,
+    d.totalCostsValue,
+    d?.data?.totalCosts,
+    d?.data?.total_costs,
+    d?.data?.total,
+  ];
+
+  for (const c of candidates) {
+    const n = Number(c);
+    if (Number.isFinite(n)) return n;
+  }
+
+  return 0;
+}
+
 type Props = NativeStackScreenProps<AppStackParamList, "OperationDetails">;
 
 function OperationDetailsScreen({ navigation, route }: Props) {
@@ -66,9 +108,6 @@ function OperationDetailsScreen({ navigation, route }: Props) {
     ).trim();
     return raw;
   }, [params]);
-
-  console.log("🧩 [OperationDetails] params.id =", params?.id);
-  console.log("🧩 [OperationDetails] operationId final =", operationId);
 
   const validOperationId = isValidUuid(operationId);
 
@@ -89,13 +128,6 @@ function OperationDetailsScreen({ navigation, route }: Props) {
   const matriculaUrl = normalizeUrl(docs.matriculaConsolidada);
   const contratoScpUrl = normalizeUrl(docs.contratoScp);
 
-  console.log("🧩 [OperationDetails] docs =", docs);
-  console.log("🧩 [OperationDetails] urls =", {
-    cartaUrl,
-    matriculaUrl,
-    contratoScpUrl,
-  });
-
   const estimatedTermLabel =
     params.estimatedTerm && params.estimatedTerm !== ""
       ? `${params.estimatedTerm} meses`
@@ -106,8 +138,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
       ? `${params.realizedTerm} meses`
       : "—";
 
-  const roiRaw = Number(params.roi ?? 0);
-  const roiExpectedPercent = roiRaw < 1 ? roiRaw * 100 : roiRaw;
+  const roiExpectedPercent = roiToPercent(params.roi);
 
   const operation = useMemo(
     () => ({
@@ -139,7 +170,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
   );
 
   /**
-   * ✅ Resumo financeiro (cache + TTL via getOperationFinancial)
+   * ✅ Resumo financeiro
    */
   const [loadingFinance, setLoadingFinance] = useState(false);
   const [amountInvested, setAmountInvested] = useState<number>(0);
@@ -155,7 +186,6 @@ function OperationDetailsScreen({ navigation, route }: Props) {
 
     const key = CACHE_KEYS.OP_FINANCIAL(operation.id, roiExpectedPercent);
 
-    // ✅ 1) prefill instantâneo do cache
     const cached = cacheGet<any>(key);
     if (cached) {
       setAmountInvested(Number(cached.amountInvested ?? 0));
@@ -169,19 +199,25 @@ function OperationDetailsScreen({ navigation, route }: Props) {
 
     let alive = true;
 
-    // ✅ 2) atualiza por trás com TTL
-    // (o TTL/force fica dentro do financialCache)
-    getOperationFinancial(String(operation.id), Number(roiExpectedPercent))
-      .then((d: any) => {
+    getOrFetch(
+      key,
+      async () => {
+        const res = await api.get(`/operation-financial/${operation.id}`, {
+          params: { roi_expected: roiExpectedPercent },
+          timeout: 30000,
+        });
+        return res.data ?? {};
+      }
+    )
+      .then((d) => {
         if (!alive) return;
-        console.log("🟩 [OperationDetails] financial (cached/ttl) =", d);
 
         setAmountInvested(Number(d.amountInvested ?? 0));
         setExpectedProfit(Number(d.expectedProfit ?? 0));
         setRealizedProfit(Number(d.realizedProfit ?? 0));
         setRealizedRoiPercent(Number(d.realizedRoiPercent ?? 0));
       })
-      .catch((err: any) => {
+      .catch((err) => {
         console.log(
           "❌ [OperationDetails] erro resumo financeiro",
           err?.response?.status,
@@ -200,12 +236,13 @@ function OperationDetailsScreen({ navigation, route }: Props) {
   }, [validOperationId, operation.id, roiExpectedPercent]);
 
   /**
-   * ✅ Total de custos (igual OperationCosts)
+   * ✅ Total de custos (IGUAL a tela OperationCosts)
+   * - Busca em /operation-costs/:id
+   * - Faz parse resiliente do campo total
    */
   const [totalCosts, setTotalCosts] = useState<number>(operation.totalCosts);
   const [loadingCosts, setLoadingCosts] = useState(false);
 
-  // ✅ se mudar de operação, sincroniza o estado com o valor inicial
   useEffect(() => {
     setTotalCosts(operation.totalCosts);
   }, [operation.totalCosts, operation.id]);
@@ -218,24 +255,39 @@ function OperationDetailsScreen({ navigation, route }: Props) {
 
     const key = CACHE_KEYS.OP_COSTS(operation.id);
 
-    // ✅ 1) preenche instantâneo do cache
+    // 1) prefill instantâneo
     const cached = cacheGet<any>(key);
-    if (cached && typeof cached.totalCosts !== "undefined") {
-      setTotalCosts(Number(cached.totalCosts ?? 0));
-      setLoadingCosts(false);
+    if (cached) {
+      const cachedTotal = pickTotalCosts(cached);
+      if (cachedTotal || cachedTotal === 0) {
+        setTotalCosts(cachedTotal);
+        setLoadingCosts(false);
+      } else {
+        setLoadingCosts(true);
+      }
     } else {
       setLoadingCosts(true);
     }
 
     let alive = true;
 
-    getOrFetch(key, async () => {
-      const res = await api.get(`/operation-costs/${operation.id}`, { timeout: 30000 });
-      return res.data ?? {};
-    })
+    getOrFetch(
+      key,
+      async () => {
+        const res = await api.get(`/operation-costs/${operation.id}`, {
+          timeout: 30000,
+        });
+        return res.data ?? {};
+      }
+    )
       .then((d) => {
         if (!alive) return;
-        setTotalCosts(Number(d?.totalCosts ?? 0));
+
+        // ✅ LOG ÚTIL pra você ver o shape real
+        console.log("🟦 [OperationDetails] /operation-costs payload =", d);
+
+        const parsed = pickTotalCosts(d);
+        setTotalCosts(parsed);
       })
       .catch((err) => {
         console.log(
@@ -309,7 +361,6 @@ function OperationDetailsScreen({ navigation, route }: Props) {
           <View style={{ width: 70 }} />
         </View>
 
-        {/* Aviso se o ID vier errado */}
         {!validOperationId && (
           <View style={styles.warnBox}>
             <Text style={styles.warnTitle}>ID da operação inválido</Text>
@@ -320,7 +371,6 @@ function OperationDetailsScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        {/* Cabeçalho */}
         <View style={styles.header}>
           <Text style={styles.title}>Detalhes da operação</Text>
           <Text style={styles.subtitle}>
@@ -328,7 +378,6 @@ function OperationDetailsScreen({ navigation, route }: Props) {
           </Text>
         </View>
 
-        {/* Card principal */}
         <View style={styles.mainCard}>
           <Text style={styles.propertyName}>{operation.name}</Text>
           <Text style={styles.location}>
@@ -364,7 +413,6 @@ function OperationDetailsScreen({ navigation, route }: Props) {
             )}
           </View>
 
-          {/* Linha do tempo */}
           <TouchableOpacity
             style={styles.timelineLink}
             activeOpacity={0.8}
@@ -506,13 +554,6 @@ function DocRow({
       </View>
     </TouchableOpacity>
   );
-}
-
-function formatCurrency(value: number): string {
-  return Number(value || 0).toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  });
 }
 
 const styles = StyleSheet.create({
