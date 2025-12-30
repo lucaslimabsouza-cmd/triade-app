@@ -138,8 +138,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
 
   /**
    * 2) /operations (cache em memória)
-   * - Se tiver cache, mostra imediatamente e evita spinner.
-   * - Revalida em background.
    */
   useEffect(() => {
     let alive = true;
@@ -169,7 +167,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
       } catch (err: any) {
         console.log("❌ [HomeScreen] /operations error:", err?.message, err?.response?.data);
         if (!alive) return;
-        // mantém o que tiver em tela; se não tiver nada, zera
         setOperations((prev) => (prev?.length ? prev : []));
       } finally {
         if (!alive) return;
@@ -185,8 +182,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
 
   /**
    * 3) financeiro por operação (background) + cache
-   * - Preenche instantâneo por op (se cache existir)
-   * - Atualiza em background com limite de concorrência (6)
    */
   useEffect(() => {
     let alive = true;
@@ -324,7 +319,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     };
   }, []);
 
-  // ✅ hooks sempre rodam (nada de return antes daqui)
   const totalOperations = operations.length;
   const activeOperations = operations.filter((op) => op.status === "em_andamento").length;
   const finishedOperations = totalOperations - activeOperations;
@@ -337,7 +331,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
 
   const greetingName = firstName ? capitalizeFirstName(firstName) : "investidor";
 
-  // ✅ só mostra TriadeLoading se ainda não tem nada para renderizar
   if (loading && operations.length === 0) return <TriadeLoading />;
 
   return (
@@ -350,12 +343,21 @@ export function HomeScreen({ navigation, onLogout }: Props) {
         )}
       </View>
 
-      {/* Total de investimento: somente em andamento */}
+      {/* ✅ Linha com 2 cards (metade do tamanho cada) */}
       <View style={styles.metricsRow}>
         <MetricCard
           label="Total dos investimentos"
           value={formatCurrency(summary.totalInvestedActive)}
         />
+
+        <TouchableOpacity
+          style={[styles.metricCard, styles.statementCard]}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate("Statement" as never)}
+        >
+          <Text style={styles.metricLabel}>Extrato</Text>
+          <Text style={styles.statementValue}>Ver extrato →</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.section}>
@@ -382,10 +384,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
       {/* Lucro realizado + ROI médio: somente concluídas */}
       <View style={styles.section}>
         <View style={styles.metricsRow}>
-          <MetricCard
-            label="Lucro realizado"
-            value={formatCurrency(summary.totalRealizedProfit)}
-          />
+          <MetricCard label="Lucro realizado" value={formatCurrency(summary.totalRealizedProfit)} />
           <MetricCard label="ROI médio realizado" value={summary.averageRoi.toFixed(1) + "%"} />
         </View>
       </View>
@@ -395,10 +394,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
         <View style={styles.notifHeaderRow}>
           <Text style={styles.sectionTitle}>Últimas notificações</Text>
 
-          <TouchableOpacity
-            onPress={() => navigation.navigate("Notifications")}
-            activeOpacity={0.8}
-          >
+          <TouchableOpacity onPress={() => navigation.navigate("Notifications")} activeOpacity={0.8}>
             <Text style={styles.notifLink}>Ver todas →</Text>
           </TouchableOpacity>
         </View>
@@ -491,9 +487,14 @@ const styles = StyleSheet.create({
   helperText: { marginTop: 6, fontSize: 12, color: "#C3C9D6" },
 
   metricsRow: { flexDirection: "row", gap: 12, marginBottom: 12 },
+
   metricCard: { flex: 1, backgroundColor: "#14395E", borderRadius: 12, padding: 12 },
   metricLabel: { color: "#C3C9D6", fontSize: 12 },
   metricValue: { color: "#FFFFFF", fontSize: 16, fontWeight: "600", marginTop: 4 },
+
+  // ✅ Extrato card (metade) - estilo “link”
+  statementCard: { justifyContent: "center" },
+  statementValue: { color: "#8AB4FF", fontSize: 14, fontWeight: "700", marginTop: 6 },
 
   section: { marginTop: 20 },
   sectionTitle: { fontSize: 18, color: "#FFFFFF", marginBottom: 8, fontWeight: "600" },

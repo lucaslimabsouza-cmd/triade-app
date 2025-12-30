@@ -13,10 +13,10 @@ import {
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/types";
-import { api } from "../services/api";
 
 import { cacheGet, getOrFetch } from "../cache/memoryCache";
 import { CACHE_KEYS } from "../cache/cacheKeys";
+import { getOperationFinancial } from "../cache/financialCache";
 
 const MAIN_BLUE = "#0E2A47";
 
@@ -139,7 +139,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
   );
 
   /**
-   * ✅ Resumo financeiro (backend)
+   * ✅ Resumo financeiro (cache + TTL via getOperationFinancial)
    */
   const [loadingFinance, setLoadingFinance] = useState(false);
   const [amountInvested, setAmountInvested] = useState<number>(0);
@@ -155,7 +155,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
 
     const key = CACHE_KEYS.OP_FINANCIAL(operation.id, roiExpectedPercent);
 
-    // ✅ 1) preenche instantâneo do cache
+    // ✅ 1) prefill instantâneo do cache
     const cached = cacheGet<any>(key);
     if (cached) {
       setAmountInvested(Number(cached.amountInvested ?? 0));
@@ -169,27 +169,19 @@ function OperationDetailsScreen({ navigation, route }: Props) {
 
     let alive = true;
 
-    // ✅ 2) atualiza por trás (cache ou servidor)
-    getOrFetch(
-      key,
-      async () => {
-        const res = await api.get(`/operation-financial/${operation.id}`, {
-          params: { roi_expected: roiExpectedPercent },
-          timeout: 30000,
-        });
-        return res.data ?? {};
-      }
-    )
-      .then((d) => {
+    // ✅ 2) atualiza por trás com TTL
+    // (o TTL/force fica dentro do financialCache)
+    getOperationFinancial(String(operation.id), Number(roiExpectedPercent))
+      .then((d: any) => {
         if (!alive) return;
-        console.log("🟩 [OperationDetails] financial =", d);
+        console.log("🟩 [OperationDetails] financial (cached/ttl) =", d);
 
         setAmountInvested(Number(d.amountInvested ?? 0));
         setExpectedProfit(Number(d.expectedProfit ?? 0));
         setRealizedProfit(Number(d.realizedProfit ?? 0));
         setRealizedRoiPercent(Number(d.realizedRoiPercent ?? 0));
       })
-      .catch((err) => {
+      .catch((err: any) => {
         console.log(
           "❌ [OperationDetails] erro resumo financeiro",
           err?.response?.status,
@@ -237,13 +229,10 @@ function OperationDetailsScreen({ navigation, route }: Props) {
 
     let alive = true;
 
-    getOrFetch(
-      key,
-      async () => {
-        const res = await api.get(`/operation-costs/${operation.id}`, { timeout: 30000 });
-        return res.data ?? {};
-      }
-    )
+    getOrFetch(key, async () => {
+      const res = await api.get(`/operation-costs/${operation.id}`, { timeout: 30000 });
+      return res.data ?? {};
+    })
       .then((d) => {
         if (!alive) return;
         setTotalCosts(Number(d?.totalCosts ?? 0));
@@ -325,8 +314,7 @@ function OperationDetailsScreen({ navigation, route }: Props) {
           <View style={styles.warnBox}>
             <Text style={styles.warnTitle}>ID da operação inválido</Text>
             <Text style={styles.warnText}>
-              O app recebeu um ID inválido. Por isso, os dados não serão
-              carregados.
+              O app recebeu um ID inválido. Por isso, os dados não serão carregados.
             </Text>
             <Text style={styles.warnText}>ID recebido: {String(operation.id)}</Text>
           </View>

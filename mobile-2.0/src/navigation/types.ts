@@ -20,20 +20,30 @@ export type AppStackParamList = {
     name: string;
     city: string;
     state: string;
-    status: "em_andamento" | "concluida";
+    status: "em_andamento" | "concluida" | string;
 
-    amountInvested: number;
-    roi: number;
-    realizedProfit: number;
-    totalCosts: number;
-    estimatedTerm: number | string;
-    realizedTerm: number | string;
+    // ⚠️ no app você manda vários desses como String(...)
+    amountInvested?: string | number;
+    expectedProfit?: string | number;
+    realizedProfit?: string | number;
+    realizedRoiPercent?: string | number;
 
-    documents: {
+    roi?: string | number;
+    roiExpectedPercent?: string | number;
+
+    totalCosts?: string | number;
+    estimatedTerm?: string | number;
+    realizedTerm?: string | number;
+
+    cartaArrematacao?: string;
+    matriculaConsolidada?: string;
+    contratoScp?: string;
+    documents?: {
       cartaArrematacao?: string;
       matriculaConsolidada?: string;
-      contratoScp?: string; // ✅ NOVO
+      contratoScp?: string;
     };
+  };
 
   OperationTimeline: {
     id: string;
@@ -44,8 +54,11 @@ export type AppStackParamList = {
   OperationCosts: {
     id: string;
     name: string;
-    totalCosts?: string; // ✅ pra começar com valor inicial se quiser
+    totalCosts?: string | number;
   };
 
   Notifications: undefined;
+
+  // ✅ NOVO
+  Statement: undefined;
 };

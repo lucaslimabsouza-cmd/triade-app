@@ -1,6 +1,8 @@
-type CacheEntry<T> = {
+// src/cache/memoryCache.ts
+
+export type CacheEntry<T> = {
   value: T;
-  ts: number;
+  ts: number; // timestamp do cache (ms)
 };
 
 const store = new Map<string, CacheEntry<any>>();
@@ -9,6 +11,22 @@ const inflight = new Map<string, Promise<any>>();
 export function cacheGet<T>(key: string): T | null {
   const hit = store.get(key);
   return hit ? (hit.value as T) : null;
+}
+
+export function cacheGetEntry<T>(key: string): CacheEntry<T> | null {
+  const hit = store.get(key);
+  return hit ? (hit as CacheEntry<T>) : null;
+}
+
+export function cacheHas(key: string, opts?: { ttlMs?: number }): boolean {
+  const hit = store.get(key);
+  if (!hit) return false;
+
+  const ttlMs = opts?.ttlMs;
+  if (!ttlMs) return true;
+
+  const fresh = Date.now() - hit.ts <= ttlMs;
+  return fresh;
 }
 
 export function cacheSet<T>(key: string, value: T) {
@@ -26,9 +44,25 @@ export function cacheClear(key?: string) {
 }
 
 /**
+ * Remove todas as chaves que começam com um prefixo.
+ * Ex: invalidateByPrefix("operation-financial:")
+ */
+export function invalidateByPrefix(prefix: string) {
+  if (!prefix) return;
+
+  for (const k of store.keys()) {
+    if (k.startsWith(prefix)) store.delete(k);
+  }
+  for (const k of inflight.keys()) {
+    if (k.startsWith(prefix)) inflight.delete(k);
+  }
+}
+
+/**
  * Pega do cache se existir; senão faz fetch, salva e retorna.
  * - Evita chamadas duplicadas com inflight.
- * - Opcional: TTL (se você quiser no futuro).
+ * - TTL opcional
+ * - force: ignora cache e refaz fetch
  */
 export async function getOrFetch<T>(
   key: string,
@@ -42,6 +76,7 @@ export async function getOrFetch<T>(
     const hit = store.get(key);
     if (hit) {
       if (!ttlMs) return hit.value as T;
+
       const fresh = Date.now() - hit.ts <= ttlMs;
       if (fresh) return hit.value as T;
     }

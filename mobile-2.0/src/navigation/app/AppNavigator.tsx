@@ -12,6 +12,9 @@ import { NotificationsScreen } from "../../screens/NotificationsScreen";
 import { OperationTimelineScreen } from "../../screens/OperationTimelineScreen";
 import { OperationCostsScreen } from "../../screens/OperationCostsScreen";
 
+// ✅ NOVO
+import { StatementScreen } from "../../screens/StatementScreen";
+
 const Stack = createNativeStackNavigator<AppStackParamList>();
 
 export function AppNavigator({ onLogout }: { onLogout: () => Promise<void> }) {
@@ -30,6 +33,9 @@ export function AppNavigator({ onLogout }: { onLogout: () => Promise<void> }) {
       <Stack.Screen name="OperationCosts" component={OperationCostsScreen} />
 
       <Stack.Screen name="Notifications" component={NotificationsScreen} />
+
+      {/* ✅ NOVO */}
+      <Stack.Screen name="Statement" component={StatementScreen} />
     </Stack.Navigator>
   );
 }
