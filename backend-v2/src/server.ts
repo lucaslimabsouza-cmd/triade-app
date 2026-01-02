@@ -18,6 +18,10 @@ import operationsRouter from "./routes/operations";
 import operationCostsRouter from "./routes/operation-costs";
 import operationFinancialRoutes from "./routes/operation-financial";
 import meRouter from "./routes/me"; // ajuste o caminho
+import notificationsRouter from "./routes/notifications";
+import pushRouter from "./routes/push";
+import pushDispatchRouter from "./routes/push-dispatch";
+
 
 
 
@@ -53,6 +57,10 @@ app.use("/auth", authRouter);
 app.use("/operations", operationsRouter);
 app.use(operationFinancialRoutes);
 app.use(meRouter);
+app.use("/notifications", notificationsRouter);
+app.use("/push", pushRouter);
+app.use("/push", pushDispatchRouter);
+
 
 
 
