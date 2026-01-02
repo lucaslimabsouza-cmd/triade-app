@@ -174,7 +174,7 @@ export function OperationTimelineScreen({ navigation, route }: Props) {
             <Text style={styles.backText}>← Voltar</Text>
           </TouchableOpacity>
 
-          <Text style={styles.headerTitle}>Linha do tempo</Text>
+          <Text style={styles.headerTitle}></Text>
           <View style={{ width: 70 }} />
         </View>
 

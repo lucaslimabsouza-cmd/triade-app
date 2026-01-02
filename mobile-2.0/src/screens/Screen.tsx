@@ -1,8 +1,8 @@
 import React from "react";
 import { ScrollView, StyleSheet, ViewStyle, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import AppHeader from "../components/AppHeader";
 
+import AppHeader from "../components/AppHeader"; // usa o AppHeader como você tem
 const MAIN_BLUE = "#0E2A47";
 
 type Props = {
@@ -14,6 +14,9 @@ type Props = {
   contentTopOffset?: number;
   contentStyle?: ViewStyle;
   scroll?: boolean;
+
+  // ✅ NOVO: badge do AppHeader vem do Home (ou de qualquer tela)
+  headerUnreadCount?: number;
 };
 
 export function Screen({
@@ -21,13 +24,15 @@ export function Screen({
   onLogout,
   children,
   padding = 16,
-  contentTopOffset = 0, // ✅ aqui: antes estava alto demais
+  contentTopOffset = 0,
   contentStyle,
   scroll = true,
+  headerUnreadCount = 0,
 }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={["left", "right", "bottom"]}>
-      <AppHeader title={title} onLogout={onLogout} />
+      {/* ✅ mantém seu AppHeader, só alimenta o unreadCount */}
+      <AppHeader title={title} onLogout={onLogout} unreadCount={headerUnreadCount} />
 
       {scroll ? (
         <ScrollView

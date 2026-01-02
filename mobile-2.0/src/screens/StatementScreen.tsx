@@ -324,7 +324,7 @@ export function StatementScreen({ navigation }: Props) {
             >
               <Text style={styles.backText}>← Voltar</Text>
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>Extrato</Text>
+            <Text style={styles.headerTitle}></Text>
             <View style={{ width: 70 }} />
           </View>
 

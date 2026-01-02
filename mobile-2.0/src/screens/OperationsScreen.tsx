@@ -244,7 +244,7 @@ export function OperationsScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <ScrollView contentContainerStyle={styles.content}>
-        <AppHeader title="Operações" onBack={() => navigation.goBack()} />
+        <AppHeader title="" onBack={() => navigation.goBack()} />
 
         <Text style={styles.title}>Minhas operações</Text>
         <Text style={styles.subtitle}>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,14 +9,22 @@ import {
   Animated,
   Easing,
   Linking,
+  Platform,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+
+import * as Device from "expo-device";
+import * as Notifications from "expo-notifications";
+import Constants from "expo-constants";
+
+import { useFocusEffect } from "@react-navigation/native";
 
 import { AppStackParamList } from "../navigation/types";
 import Screen from "./Screen";
 
+import TriadeLoading from "../ui/TriadeLoading";
+
 import { api } from "../services/api";
-import { lastLoginStorage } from "../storage/lastLoginStorage";
 
 import { cacheGet, getOrFetch } from "../cache/memoryCache";
 import { CACHE_KEYS } from "../cache/cacheKeys";
@@ -55,14 +63,14 @@ type OperationFinancial = {
   roiExpectedPercent: number;
 };
 
+// ✅ alinhado com retorno do backend
 type NotificationItem = {
-  id: string;
-  dateTimeRaw: string | null;
-  codigoImovel: string;
-  title: string;
-  shortMessage: string;
-  detailedMessage?: string | null;
-  type?: string | null;
+  id: number;
+  datahora?: string | null;
+  codigo_imovel?: string | null;
+  mensagem_curta?: string | null;
+  mensagem_detalhada?: string | null;
+  tipo?: string | null;
 };
 
 type Props = NativeStackScreenProps<AppStackParamList, "Home"> & {
@@ -106,6 +114,16 @@ function safeNumber(n: any) {
   return Number.isFinite(v) ? v : 0;
 }
 
+function formatDateBR(dateLike: any): string {
+  if (!dateLike) return "";
+  const d = new Date(dateLike);
+  if (isNaN(d.getTime())) return "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(d.getFullYear());
+  return `${dd}/${mm}/${yyyy}`;
+}
+
 function getSummaryFromOperations(
   operations: Operation[],
   financialById: Record<string, OperationFinancial | undefined>
@@ -142,12 +160,8 @@ function getSummaryFromOperations(
 /**
  * =====================
  * Chart data
- * - Realizado (verde) sólido
- * - Esperado (azul) tracejado
- * - Esperado começa no último ponto do realizado (conecta)
  * =====================
  */
-
 type ChartPoint = { x: number; y: number; kind: "realized" | "expected" };
 
 function buildRoiChartData(
@@ -208,7 +222,6 @@ function mapToXY(
   const minX = Math.min(...xs);
   const maxX = Math.max(...xs);
 
-  // ✅ se tiver só 1 ponto, centraliza
   const singlePoint = maxX === minX;
 
   const xSpan = Math.max(1, maxX - minX);
@@ -283,7 +296,7 @@ function Dot({
           left: x - 6,
           top: y - 6,
           borderColor,
-          backgroundColor: fillColor, // ✅ ponto preenchido (não some)
+          backgroundColor: fillColor,
         },
       ]}
     />
@@ -300,12 +313,12 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 }
 
 /* =========================
-   Bottom Sheet (Assessoria)
+  Bottom Sheet (Assessoria)
 ========================= */
 
 function useBottomSheet() {
   const [open, setOpen] = useState(false);
-  const anim = useRef(new Animated.Value(0)).current; // 0 fechado, 1 aberto
+  const anim = useRef(new Animated.Value(0)).current;
 
   function show() {
     setOpen(true);
@@ -341,12 +354,81 @@ function useBottomSheet() {
   return { open, show, hide, backdropOpacity, translateY };
 }
 
+/* =========================
+  Badge (não lidas)
+========================= */
+function Badge({ count }: { count: number }) {
+  if (!count || count <= 0) return null;
+  const text = count > 99 ? "99+" : String(count);
+  return (
+    <View style={styles.badge}>
+      <Text style={styles.badgeText}>{text}</Text>
+    </View>
+  );
+}
+
+/**
+ * =========================
+ * Push register (mobile)
+ * =========================
+ */
+async function registerForPushOnce() {
+  try {
+    console.log("🔔 [Push] start registerForPushOnce");
+
+    if (!Device.isDevice) {
+      console.log("⚠️ [Push] not a physical device");
+      return;
+    }
+
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    console.log("🔔 [Push] existingStatus:", existingStatus);
+
+    let finalStatus = existingStatus;
+    if (existingStatus !== "granted") {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    console.log("🔔 [Push] finalStatus:", finalStatus);
+
+    if (finalStatus !== "granted") {
+      console.log("❌ [Push] permission denied");
+      return;
+    }
+
+    const projectId =
+      (Constants as any)?.expoConfig?.extra?.eas?.projectId ??
+      (Constants as any)?.easConfig?.projectId;
+
+    if (!projectId) {
+      console.log("❌ [Push] projectId missing");
+      return;
+    }
+
+    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+    console.log("✅ [Push] Expo token:", token);
+
+    await api.post("/push/token", { expo_push_token: token });
+    console.log("✅ [Push] token sent to backend");
+
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "default",
+        importance: Notifications.AndroidImportance.MAX,
+      });
+    }
+  } catch (err: any) {
+    console.log("❌ [Push] error:", err?.message ?? err);
+  }
+}
+
 export function HomeScreen({ navigation, onLogout }: Props) {
   const [operations, setOperations] = useState<Operation[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loadingNotifs, setLoadingNotifs] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const [firstName, setFirstName] = useState<string>("");
 
@@ -355,11 +437,11 @@ export function HomeScreen({ navigation, onLogout }: Props) {
   );
   const [loadingFinancial, setLoadingFinancial] = useState(false);
 
-  // chart width responsive
   const [chartW, setChartW] = useState(0);
   const CHART_H = 160;
 
-  // assessoria info (fixo por enquanto)
+  const pushRegisteredRef = useRef(false);
+
   const ADVISOR = {
     name: "Otavio Souza",
     phone: "(35) 99720-7039",
@@ -367,6 +449,57 @@ export function HomeScreen({ navigation, onLogout }: Props) {
   };
 
   const sheet = useBottomSheet();
+
+  const isHomeReady = useMemo(() => {
+    if (loading) return false;
+    if (!operations || operations.length === 0) return false;
+    if (loadingFinancial) return false;
+    return true;
+  }, [loading, operations, loadingFinancial]);
+
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const res = await api.get("/notifications/unread-count", { timeout: 20000 });
+      const unread = Number(res.data?.unread ?? 0);
+      setUnreadCount(Number.isFinite(unread) ? unread : 0);
+    } catch {
+      // silencioso
+    }
+  }, []);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      setLoadingNotifs(true);
+
+      const key = CACHE_KEYS.NOTIFICATIONS("me-v2");
+      const cached = cacheGet<any>(key);
+
+      if (cached?.notifications && Array.isArray(cached.notifications)) {
+        setNotifications(cached.notifications);
+        setLoadingNotifs(false);
+      }
+
+      const data = await getOrFetch(key, async () => {
+        const res = await api.get("/notifications", { timeout: 30000 });
+        return res.data ?? {};
+      });
+
+      const list = Array.isArray(data?.notifications) ? data.notifications : [];
+      setNotifications(list);
+    } catch {
+      setNotifications((prev) => (prev?.length ? prev : []));
+    } finally {
+      setLoadingNotifs(false);
+    }
+  }, []);
+
+  // ✅ Atualiza badge e lista quando a Home ganha foco (voltar de notificações, abrir app, etc.)
+  useFocusEffect(
+    useCallback(() => {
+      fetchUnreadCount();
+      fetchNotifications();
+    }, [fetchUnreadCount, fetchNotifications])
+  );
 
   // /me
   useEffect(() => {
@@ -397,13 +530,12 @@ export function HomeScreen({ navigation, onLogout }: Props) {
           firstNameFromFullName(String(party.name ?? d.fullName ?? "").trim());
 
         setFirstName(fn);
-      } catch (err: any) {
-        console.log(
-          "❌ [HomeScreen] erro /me:",
-          err?.response?.status,
-          err?.response?.data,
-          err?.message ?? err
-        );
+
+        if (!pushRegisteredRef.current) {
+          pushRegisteredRef.current = true;
+          registerForPushOnce();
+        }
+      } catch {
         if (!alive) return;
         setFirstName("");
       }
@@ -439,8 +571,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
 
         if (!alive) return;
         setOperations(ops);
-      } catch (err: any) {
-        console.log("❌ [HomeScreen] /operations error:", err?.message, err?.response?.data);
+      } catch {
         if (!alive) return;
         setOperations((prev) => (prev?.length ? prev : []));
       } finally {
@@ -506,14 +637,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
               });
 
               results[id] = buildFinancialFromApi(d, roiExpectedPercent);
-            } catch (err: any) {
-              console.log(
-                "❌ [HomeScreen] erro financeiro",
-                id,
-                err?.response?.status,
-                err?.response?.data,
-                err?.message ?? err
-              );
+            } catch {
               results[id] = undefined;
             }
           }
@@ -537,55 +661,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     };
   }, [operations]);
 
-  // notifs
-  useEffect(() => {
-    let alive = true;
-
-    async function loadNotifs() {
-      try {
-        if (!alive) return;
-        setLoadingNotifs(true);
-
-        const cpf = await lastLoginStorage.getCpf();
-        if (!cpf) {
-          if (!alive) return;
-          setNotifications([]);
-          return;
-        }
-
-        const key = CACHE_KEYS.NOTIFICATIONS(cpf);
-
-        const cached = cacheGet<NotificationItem[]>(key);
-        if (cached && Array.isArray(cached)) {
-          if (!alive) return;
-          setNotifications(cached);
-          setLoadingNotifs(false);
-        }
-
-        const data = await getOrFetch(key, async () => {
-          const res = await api.get(`/notifications?cpf=${encodeURIComponent(cpf)}`, {
-            timeout: 30000,
-          });
-          return (res.data ?? []) as NotificationItem[];
-        });
-
-        if (!alive) return;
-        setNotifications(Array.isArray(data) ? data : []);
-      } catch {
-        if (!alive) return;
-        setNotifications((prev) => (prev?.length ? prev : []));
-      } finally {
-        if (!alive) return;
-        setLoadingNotifs(false);
-      }
-    }
-
-    loadNotifs();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
   const totalOperations = operations.length;
   const activeOperations = operations.filter((op) => op.status === "em_andamento").length;
   const finishedOperations = totalOperations - activeOperations;
@@ -595,11 +670,9 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     financialById,
   ]);
 
-  const latestNotifs = (notifications ?? []).slice(0, 1);
-
+  const latestNotifs = (notifications ?? []).slice(0, 2);
   const greetingName = firstName ? capitalizeFirstName(firstName) : "investidor";
 
-  // chart
   const chart = useMemo(() => buildRoiChartData(operations, financialById), [operations, financialById]);
 
   const realizedMapped = useMemo(() => {
@@ -628,15 +701,38 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     if (can) Linking.openURL(url);
   }
 
+  // ✅ LOADING — agora também alimenta o badge do header
+  if (!isHomeReady) {
+    return (
+      <Screen
+        title=""
+        onLogout={onLogout}
+        padding={16}
+        contentTopOffset={0}
+        headerUnreadCount={unreadCount}
+      >
+        <View style={{ flex: 1, backgroundColor: MAIN_BLUE }}>
+          <TriadeLoading />
+        </View>
+      </Screen>
+    );
+  }
+
+  // ✅ NORMAL — badge do header vem do unreadCount
   return (
-    <Screen title="Home" onLogout={onLogout} padding={16} contentTopOffset={0}>
+    <Screen
+      title=""
+      onLogout={onLogout}
+      padding={16}
+      contentTopOffset={0}
+      headerUnreadCount={unreadCount}
+    >
       <View style={styles.header}>
         <Text style={styles.welcomeText}>Olá, {greetingName}</Text>
         <Text style={styles.subtitle}>Acompanhe a evolução dos seus investimentos.</Text>
-        {loadingFinancial && <Text style={styles.helperText}>Atualizando valores financeiros...</Text>}
       </View>
 
-      {/* Total (grande full width) */}
+      {/* Total */}
       <View style={styles.metricsRow}>
         <View style={[styles.metricCard, styles.metricCardBig]}>
           <Text style={styles.metricLabel}>Total dos investimentos</Text>
@@ -700,12 +796,10 @@ export function HomeScreen({ navigation, onLogout }: Props) {
             }}
           >
             <View style={[styles.chartArea, { height: CHART_H }]}>
-              {/* grid */}
               <View style={[styles.gridLine, { top: CHART_H * 0.25 }]} />
               <View style={[styles.gridLine, { top: CHART_H * 0.5 }]} />
               <View style={[styles.gridLine, { top: CHART_H * 0.75 }]} />
 
-              {/* Realizado (verde) */}
               {realizedSegs.map((s, idx) => (
                 <SegmentLine
                   key={`r-${idx}`}
@@ -722,11 +816,10 @@ export function HomeScreen({ navigation, onLogout }: Props) {
                   x={p.x}
                   y={p.y}
                   borderColor={TRI.green}
-                  fillColor={TRI.green} // ✅ agora sempre aparece
+                  fillColor={TRI.green}
                 />
               ))}
 
-              {/* Esperado (azul tracejado) */}
               {expectedSegs.map((s, idx) => (
                 <SegmentLine
                   key={`e-${idx}`}
@@ -778,7 +871,10 @@ export function HomeScreen({ navigation, onLogout }: Props) {
       {/* Notificações */}
       <View style={styles.section}>
         <View style={styles.notifHeaderRow}>
-          <Text style={styles.sectionTitle}>Últimas notificações</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={styles.sectionTitle}>Últimas notificações</Text>
+            <Badge count={unreadCount} />
+          </View>
 
           <TouchableOpacity onPress={() => navigation.navigate("Notifications")} activeOpacity={0.8}>
             <Text style={styles.notifLink}>Ver todas →</Text>
@@ -792,61 +888,50 @@ export function HomeScreen({ navigation, onLogout }: Props) {
         ) : (
           latestNotifs.map((n) => (
             <TouchableOpacity
-              key={n.id}
+              key={String(n.id)}
               style={styles.notifCard}
               activeOpacity={0.85}
               onPress={() => navigation.navigate("Notifications")}
             >
               <Text style={styles.notifMeta}>
-                {n.codigoImovel}
-                {n.dateTimeRaw ? ` • ${n.dateTimeRaw}` : ""}
+                {n.codigo_imovel ?? "Global"}
+                {n.datahora ? ` • ${formatDateBR(n.datahora)}` : ""}
               </Text>
 
-              <Text style={styles.notifShort}>{n.shortMessage}</Text>
-
-              <Text style={styles.notifLong}>
-                {n.detailedMessage && n.detailedMessage.trim() !== ""
-                  ? n.detailedMessage
-                  : "Ainda não disponível."}
-              </Text>
+              <Text style={styles.notifShort}>{n.mensagem_curta ?? ""}</Text>
             </TouchableOpacity>
           ))
         )}
       </View>
 
-{/* ✅ Assessoria (card clicável abrindo bottom sheet) */}
-<View style={styles.section}>
-  <Text style={styles.sectionTitle}>Assessoria de investimentos</Text>
+      {/* Assessoria */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Assessoria de investimentos</Text>
 
-  <TouchableOpacity
-    activeOpacity={0.85}
-    onPress={sheet.show}
-    style={styles.advisorCard}
-  >
-    <View style={styles.advisorLeft}>
-      <View style={styles.avatarCircle}>
-        <Text style={styles.avatarText}>OS</Text>
+        <TouchableOpacity activeOpacity={0.85} onPress={sheet.show} style={styles.advisorCard}>
+          <View style={styles.advisorLeft}>
+            <View style={styles.avatarCircle}>
+              <Text style={styles.avatarText}>OS</Text>
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.advisorSmall}>Sua assessoria</Text>
+              <Text style={styles.advisorName}>{ADVISOR.name}</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={styles.contactBtn}
+            activeOpacity={0.85}
+            onPress={(e) => {
+              e.stopPropagation();
+              sheet.show();
+            }}
+          >
+            <Text style={styles.contactBtnText}>Contato</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </View>
-
-      <View style={{ flex: 1 }}>
-        <Text style={styles.advisorSmall}>Sua assessoria</Text>
-        <Text style={styles.advisorName}>{ADVISOR.name}</Text>
-      </View>
-    </View>
-
-    <TouchableOpacity
-      style={styles.contactBtn}
-      activeOpacity={0.85}
-      onPress={(e) => {
-        e.stopPropagation(); // ✅ impede disparar o onPress do card
-        sheet.show();
-      }}
-    >
-      <Text style={styles.contactBtnText}>Contato</Text>
-    </TouchableOpacity>
-  </TouchableOpacity>
-</View>
-
 
       {/* Bottom sheet contato */}
       <Modal visible={sheet.open} transparent animationType="none" onRequestClose={sheet.hide}>
@@ -862,9 +947,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.sheetSubtitle}>
-            Como você prefere ser atendido pela sua assessoria?
-          </Text>
+          <Text style={styles.sheetSubtitle}>Como você prefere ser atendido pela sua assessoria?</Text>
 
           <TouchableOpacity style={styles.sheetRow} activeOpacity={0.85} onPress={openEmail}>
             <View style={styles.sheetIcon}>
@@ -913,7 +996,6 @@ const styles = StyleSheet.create({
   metricLabel: { color: TRI.muted, fontSize: 12 },
   metricValue: { color: TRI.text, fontSize: 18, fontWeight: "800", marginTop: 6 },
 
-  // halves
   halfRow: { flexDirection: "row", gap: 12, marginTop: 4 },
   halfCard: {
     flex: 1,
@@ -928,13 +1010,11 @@ const styles = StyleSheet.create({
   halfTitleCenter: { color: TRI.text, fontSize: 14, fontWeight: "800", textAlign: "center" },
   halfSubtitle: { color: TRI.muted, fontSize: 11, marginTop: 6, fontWeight: "700" },
 
-  // operations
   operationsCard: { backgroundColor: TRI.card, borderRadius: 12, padding: 16 },
   operationsTitle: { color: TRI.text, fontSize: 16, fontWeight: "600", marginBottom: 4 },
   operationsSubtitle: { color: "#C5D2E0", fontSize: 13, marginBottom: 10 },
   operationsLinkText: { color: TRI.link, fontSize: 13, fontWeight: "500" },
 
-  // chart
   chartCard: {
     backgroundColor: TRI.card,
     borderRadius: 12,
@@ -973,7 +1053,6 @@ const styles = StyleSheet.create({
   segSolid: { opacity: 1 },
   segDashed: {
     opacity: 0.95,
-    // “tracejado” simples com borda
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.25)",
   },
@@ -996,7 +1075,6 @@ const styles = StyleSheet.create({
   legendText: { color: TRI.muted, fontSize: 12, fontWeight: "800" },
   chartEmpty: { marginTop: 10, color: TRI.muted, fontSize: 12, fontWeight: "700" },
 
-  // notifications
   notifHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1007,10 +1085,21 @@ const styles = StyleSheet.create({
   notifEmpty: { color: TRI.muted, fontSize: 13 },
   notifCard: { backgroundColor: TRI.card, borderRadius: 12, padding: 12 },
   notifMeta: { color: TRI.muted, fontSize: 11, marginBottom: 6 },
-  notifShort: { color: TRI.text, fontSize: 14, fontWeight: "700", marginBottom: 6 },
-  notifLong: { color: "#E2E6F0", fontSize: 12, lineHeight: 18 },
+  notifShort: { color: TRI.text, fontSize: 14, fontWeight: "700" },
 
-  // advisor (igual antes)
+  badge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: TRI.red,
+    borderWidth: 2,
+    borderColor: MAIN_BLUE,
+  },
+  badgeText: { color: "#fff", fontSize: 11, fontWeight: "900" },
+
   advisorCard: {
     backgroundColor: TRI.card,
     borderRadius: 14,
@@ -1040,7 +1129,6 @@ const styles = StyleSheet.create({
   },
   contactBtnText: { color: "#F5BF42", fontWeight: "900", fontSize: 13 },
 
-  // bottom sheet
   backdrop: { flex: 1, backgroundColor: "#000" },
   sheet: {
     position: "absolute",
@@ -1064,7 +1152,13 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.08)",
   },
   closeBtnText: { color: TRI.text, fontSize: 22, fontWeight: "900" },
-  sheetSubtitle: { color: TRI.muted, marginTop: 8, marginBottom: 14, fontSize: 12, fontWeight: "700" },
+  sheetSubtitle: {
+    color: TRI.muted,
+    marginTop: 8,
+    marginBottom: 14,
+    fontSize: 12,
+    fontWeight: "700",
+  },
 
   sheetRow: {
     backgroundColor: "rgba(255,255,255,0.06)",

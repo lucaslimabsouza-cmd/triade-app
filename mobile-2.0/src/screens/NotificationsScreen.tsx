@@ -1,38 +1,115 @@
 // src/screens/NotificationsScreen.tsx
-import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { AppStackParamList } from "../navigation/types";
+import { useFocusEffect } from "@react-navigation/native";
+
+import TriadeLoading from "../ui/TriadeLoading";
+import { api } from "../services/api";
 
 const MAIN_BLUE = "#0E2A47";
 
-type Props = NativeStackScreenProps<AppStackParamList, "Notifications">;
+type NotificationItem = {
+  id: number;
+  datahora?: string | null;
+  codigo_imovel?: string | null;
+  mensagem_curta?: string | null;
+  mensagem_detalhada?: string | null;
+  tipo?: string | null;
+};
 
-export function NotificationsScreen({ navigation }: Props) {
+function formatDateBR(iso?: string | null) {
+  const s = String(iso ?? "").trim();
+  if (!s) return "";
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime())) return "";
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(d.getFullYear());
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+export function NotificationsScreen() {
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setLoading(true);
+      setErrorMsg(null);
+
+      const res = await api.get("/notifications", { timeout: 30000 });
+      const payload = res.data ?? {};
+      const list = Array.isArray(payload?.notifications) ? payload.notifications : [];
+
+      setNotifications(list);
+
+      // ✅ Considera como "lido" quando a pessoa VISITA a página
+      // (se a rota existir no backend)
+      try {
+        await api.post("/notifications/mark-read", { mode: "all" }, { timeout: 20000 });
+      } catch {
+        // silencioso (não quebra a tela se ainda não estiver ok)
+      }
+    } catch (err: any) {
+      setNotifications([]);
+      setErrorMsg("Não foi possível carregar notificações.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // carrega 1x
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // e também recarrega quando entrar na tela (caso chegue push/novas)
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top", "left", "right", "bottom"]}>
+        <View style={styles.loadingWrap}>
+          <TriadeLoading />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <View style={styles.content}>
-        <View style={styles.headerRow}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            activeOpacity={0.8}
-            style={styles.backBtn}
-          >
-            <Text style={styles.backText}>← Voltar</Text>
-          </TouchableOpacity>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right", "bottom"]}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {/* ✅ título dentro da tela (sem header) */}
+        <Text style={styles.pageTitle}>Notificações</Text>
 
-          <Text style={styles.headerTitle}>Notificações</Text>
-          <View style={{ width: 70 }} />
-        </View>
+        {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
 
-        <View style={styles.card}>
-          <Text style={styles.title}>Em breve</Text>
-          <Text style={styles.sub}>
-            Vamos montar essa tela depois (sem quebrar o app).
-          </Text>
-        </View>
-      </View>
+        {notifications.length === 0 ? (
+          <Text style={styles.emptyText}>Nenhuma notificação encontrada.</Text>
+        ) : (
+          notifications.map((n) => (
+            <View key={String(n.id)} style={styles.card}>
+              <Text style={styles.meta}>
+                {(n.codigo_imovel ? n.codigo_imovel : "Global") +
+                  (n.datahora ? ` • ${formatDateBR(n.datahora)}` : "")}
+              </Text>
+
+              <Text style={styles.short}>{n.mensagem_curta ?? ""}</Text>
+
+              {n.mensagem_detalhada && String(n.mensagem_detalhada).trim() !== "" ? (
+                <Text style={styles.details}>{n.mensagem_detalhada}</Text>
+              ) : null}
+            </View>
+          ))
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -41,19 +118,28 @@ export default NotificationsScreen;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: MAIN_BLUE },
-  content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 },
+  content: { padding: 16, paddingBottom: 24 },
 
-  headerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  // loading centralizado de verdade
+  loadingWrap: { flex: 1, justifyContent: "center", alignItems: "center" },
+
+  pageTitle: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 12,
+  },
+
+  emptyText: { color: "#C3C9D6", fontSize: 13 },
+  errorText: { color: "#FFB4B4", fontSize: 13, marginBottom: 10 },
+
+  card: {
+    backgroundColor: "#14395E",
+    padding: 12,
+    borderRadius: 12,
     marginBottom: 10,
   },
-  backBtn: { width: 70, paddingVertical: 6 },
-  backText: { color: "#8AB4FF", fontSize: 13, fontWeight: "700" },
-  headerTitle: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
-
-  card: { marginTop: 12, backgroundColor: "#14395E", borderRadius: 12, padding: 14 },
-  title: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" },
-  sub: { color: "#D0D7E3", marginTop: 8 },
+  meta: { color: "#C3C9D6", fontSize: 11, marginBottom: 6 },
+  short: { color: "#FFFFFF", fontSize: 14, fontWeight: "700", marginBottom: 4 },
+  details: { color: "#E2E6F0", fontSize: 12, lineHeight: 18 },
 });

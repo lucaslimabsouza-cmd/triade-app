@@ -1,104 +1,127 @@
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { useNavigation, useRoute } from "@react-navigation/native";
-import { SafeAreaView } from "react-native-safe-area-context";
-
-import { tokenStorage } from "../storage/tokenStorage";
+import { View, Text, StyleSheet, TouchableOpacity, Image } from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const MAIN_BLUE = "#0E2A47";
 
+// ✅ Assets (caminho correto a partir de src/components)
+const logoTriade = require("../../assets/logo-triade-icon.png");
+const iconLogout = require("../../assets/sair.png");
+const iconMsg = require("../../assets/mensagem.png");
+
 type Props = {
-  title?: string;
+  title: string;
   onLogout?: () => Promise<void>;
+  unreadCount?: number; // ✅ vem do Home (mesmo padrão)
 };
 
-export function AppHeader({ title, onLogout }: Props) {
+export default function AppHeader({ title, onLogout, unreadCount = 0 }: Props) {
   const navigation = useNavigation<any>();
-  const route = useRoute();
+  const insets = useSafeAreaInsets();
 
-  const isHome = route.name === "Home";
-
-  async function handleLeftPress() {
-    if (isHome) {
-      Alert.alert("Sair", "Deseja sair da sua conta?", [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Sair",
-          style: "destructive",
-          onPress: async () => {
-            await tokenStorage.clear();
-            if (onLogout) await onLogout();
-          },
-        },
-      ]);
-    } else {
-      navigation.goBack();
-    }
-  }
+  const n = Number(unreadCount) || 0;
+  const showBadge = n > 0;
+  const badgeText = n > 99 ? "99+" : String(n);
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.container}>
-        <TouchableOpacity
-          onPress={handleLeftPress}
-          style={styles.leftBtn}
-          activeOpacity={0.8}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons
-            name={isHome ? "log-out-outline" : "chevron-back"}
-            size={22}
-            color="#FFFFFF"
-          />
-        </TouchableOpacity>
+    <View style={[styles.safeTop, { paddingTop: insets.top }]}>
+      <View style={styles.bar}>
+        {/* Left: Logo */}
+        <View style={styles.left}>
+          <Image source={logoTriade} style={styles.logo} />
+        </View>
 
-        <Text style={styles.title} numberOfLines={1}>
-          {title ?? ""}
-        </Text>
+        {/* Center: Title */}
+        <View style={styles.center}>
+          <Text style={styles.title} numberOfLines={1}>
+            {title}
+          </Text>
+        </View>
 
-        {/* Espaço do lado direito para centralizar o título */}
-        <View style={styles.rightSpace} />
+        {/* Right: Icons */}
+        <View style={styles.right}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate("Notifications")}
+            style={styles.iconBtn}
+            hitSlop={10}
+          >
+            <Image source={iconMsg} style={styles.icon} />
+
+            {/* ✅ Badge (SEM mexer layout) */}
+            {showBadge ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{badgeText}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={onLogout}
+            style={styles.iconBtn}
+            hitSlop={10}
+          >
+            <Image source={iconLogout} style={styles.icon} />
+          </TouchableOpacity>
+        </View>
       </View>
-
-      <View style={styles.divider} />
-    </SafeAreaView>
+    </View>
   );
 }
 
-export default AppHeader;
+const BAR_HEIGHT = 44; // ✅ mantém igual
 
 const styles = StyleSheet.create({
-  safe: {
-    backgroundColor: MAIN_BLUE,
-  },
-  container: {
-    height: 56, // ✅ maior (antes era 44)
+  safeTop: { backgroundColor: MAIN_BLUE },
+
+  bar: {
+    height: BAR_HEIGHT,
     backgroundColor: MAIN_BLUE,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
   },
-  divider: {
-    height: 1,
-    backgroundColor: "#163B60",
+
+  left: { width: 48, justifyContent: "center", alignItems: "flex-start" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
+
+  right: {
+    width: 88,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 14,
   },
-  leftBtn: {
-    width: 44, // ✅ área clicável maior
-    height: 44,
+
+  logo: { width: 40, height: 40, resizeMode: "contain" },
+
+  title: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+
+  iconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
+    position: "relative",
   },
-  title: {
-    flex: 1,
-    textAlign: "center",
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "700",
-    paddingHorizontal: 8,
+
+  icon: { width: 20, height: 20, resizeMode: "contain" },
+
+  // ✅ badge pequeno, sem mexer no layout
+  badge: {
+    position: "absolute",
+    top: -4,
+    right: -6,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 999,
+    backgroundColor: "#EB5757",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
   },
-  rightSpace: {
-    width: 44,
-    height: 44,
-  },
+  badgeText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
 });
