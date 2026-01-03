@@ -1,28 +1,34 @@
 // src/screens/OperationDetailsScreen.tsx
 
-import React, { useMemo, useEffect, useState } from "react";
-import { SafeAreaView } from "react-native-safe-area-context";
+import React, { useMemo, useCallback, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
   Alert,
   Linking,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useFocusEffect } from "@react-navigation/native";
+
 import { AppStackParamList } from "../navigation/types";
+import Screen from "./Screen";
 import { api } from "../services/api";
 
 import { cacheGet, getOrFetch } from "../cache/memoryCache";
 import { CACHE_KEYS } from "../cache/cacheKeys";
+
+// ✅ pull-to-refresh (1 linha)
+import { useScreenRefresh } from "../refresh/useScreenRefresh";
 
 const MAIN_BLUE = "#0E2A47";
 
 /* =========================
    Utils
 ========================= */
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function normalizeUrl(u?: string | null) {
   const raw = String(u ?? "").trim();
@@ -172,140 +178,130 @@ function OperationDetailsScreen({ navigation, route }: Props) {
   /**
    * ✅ Resumo financeiro
    */
-  const [loadingFinance, setLoadingFinance] = useState(false);
-  const [amountInvested, setAmountInvested] = useState<number>(0);
-  const [expectedProfit, setExpectedProfit] = useState<number>(0);
-  const [realizedProfit, setRealizedProfit] = useState<number>(0);
-  const [realizedRoiPercent, setRealizedRoiPercent] = useState<number>(0);
+  const financeKey = useMemo(() => {
+    return CACHE_KEYS.OP_FINANCIAL(operation.id, roiExpectedPercent);
+  }, [operation.id, roiExpectedPercent]);
 
-  useEffect(() => {
-    if (!validOperationId) {
-      setLoadingFinance(false);
-      return;
-    }
+  const cachedFinanceFirst = useMemo(() => cacheGet<any>(financeKey), [financeKey]);
 
-    const key = CACHE_KEYS.OP_FINANCIAL(operation.id, roiExpectedPercent);
-
-    const cached = cacheGet<any>(key);
-    if (cached) {
-      setAmountInvested(Number(cached.amountInvested ?? 0));
-      setExpectedProfit(Number(cached.expectedProfit ?? 0));
-      setRealizedProfit(Number(cached.realizedProfit ?? 0));
-      setRealizedRoiPercent(Number(cached.realizedRoiPercent ?? 0));
-      setLoadingFinance(false);
-    } else {
-      setLoadingFinance(true);
-    }
-
-    let alive = true;
-
-    getOrFetch(
-      key,
-      async () => {
-        const res = await api.get(`/operation-financial/${operation.id}`, {
-          params: { roi_expected: roiExpectedPercent },
-          timeout: 30000,
-        });
-        return res.data ?? {};
-      }
-    )
-      .then((d) => {
-        if (!alive) return;
-
-        setAmountInvested(Number(d.amountInvested ?? 0));
-        setExpectedProfit(Number(d.expectedProfit ?? 0));
-        setRealizedProfit(Number(d.realizedProfit ?? 0));
-        setRealizedRoiPercent(Number(d.realizedRoiPercent ?? 0));
-      })
-      .catch((err) => {
-        console.log(
-          "❌ [OperationDetails] erro resumo financeiro",
-          err?.response?.status,
-          err?.response?.data,
-          err?.message ?? err
-        );
-      })
-      .finally(() => {
-        if (!alive) return;
-        setLoadingFinance(false);
-      });
-
-    return () => {
-      alive = false;
-    };
-  }, [validOperationId, operation.id, roiExpectedPercent]);
+  const [loadingFinance, setLoadingFinance] = useState(() => !cachedFinanceFirst);
+  const [amountInvested, setAmountInvested] = useState<number>(() =>
+    Number(cachedFinanceFirst?.amountInvested ?? 0)
+  );
+  const [expectedProfit, setExpectedProfit] = useState<number>(() =>
+    Number(cachedFinanceFirst?.expectedProfit ?? 0)
+  );
+  const [realizedProfit, setRealizedProfit] = useState<number>(() =>
+    Number(cachedFinanceFirst?.realizedProfit ?? 0)
+  );
+  const [realizedRoiPercent, setRealizedRoiPercent] = useState<number>(() =>
+    Number(cachedFinanceFirst?.realizedRoiPercent ?? 0)
+  );
 
   /**
-   * ✅ Total de custos (IGUAL a tela OperationCosts)
-   * - Busca em /operation-costs/:id
-   * - Faz parse resiliente do campo total
+   * ✅ Total de custos (igual OperationCosts)
    */
-  const [totalCosts, setTotalCosts] = useState<number>(operation.totalCosts);
-  const [loadingCosts, setLoadingCosts] = useState(false);
+  const costsKey = useMemo(() => CACHE_KEYS.OP_COSTS(operation.id), [operation.id]);
+  const cachedCostsFirst = useMemo(() => cacheGet<any>(costsKey), [costsKey]);
 
-  useEffect(() => {
-    setTotalCosts(operation.totalCosts);
-  }, [operation.totalCosts, operation.id]);
-
-  useEffect(() => {
-    if (!validOperationId) {
-      setLoadingCosts(false);
-      return;
+  const [totalCosts, setTotalCosts] = useState<number>(() => {
+    if (cachedCostsFirst) {
+      const v = pickTotalCosts(cachedCostsFirst);
+      return Number.isFinite(v) ? v : Number(operation.totalCosts ?? 0);
     }
+    return Number(operation.totalCosts ?? 0);
+  });
 
-    const key = CACHE_KEYS.OP_COSTS(operation.id);
+  const [loadingCosts, setLoadingCosts] = useState(() => !cachedCostsFirst);
 
-    // 1) prefill instantâneo
-    const cached = cacheGet<any>(key);
-    if (cached) {
-      const cachedTotal = pickTotalCosts(cached);
-      if (cachedTotal || cachedTotal === 0) {
-        setTotalCosts(cachedTotal);
+  const loadData = useCallback(async () => {
+    if (!validOperationId) return;
+
+    try {
+      /**
+       * 1) Prefill cache imediato (sem “piscar”)
+       */
+      const cachedFin = cacheGet<any>(financeKey);
+      if (cachedFin) {
+        setAmountInvested(Number(cachedFin.amountInvested ?? 0));
+        setExpectedProfit(Number(cachedFin.expectedProfit ?? 0));
+        setRealizedProfit(Number(cachedFin.realizedProfit ?? 0));
+        setRealizedRoiPercent(Number(cachedFin.realizedRoiPercent ?? 0));
+        setLoadingFinance(false);
+      } else {
+        setLoadingFinance(true);
+      }
+
+      const cachedCost = cacheGet<any>(costsKey);
+      if (cachedCost) {
+        const parsed = pickTotalCosts(cachedCost);
+        setTotalCosts(parsed);
         setLoadingCosts(false);
       } else {
         setLoadingCosts(true);
       }
-    } else {
-      setLoadingCosts(true);
+
+      /**
+       * 2) Busca (cache ou servidor) em paralelo
+       */
+      const [fin, costs] = await Promise.all([
+        getOrFetch(financeKey, async () => {
+          const res = await api.get(`/operation-financial/${operation.id}`, {
+            params: { roi_expected: roiExpectedPercent },
+            timeout: 30000,
+          });
+          return res.data ?? {};
+        }),
+        getOrFetch(costsKey, async () => {
+          const res = await api.get(`/operation-costs/${operation.id}`, {
+            timeout: 30000,
+          });
+          return res.data ?? {};
+        }),
+      ]);
+
+      // finance
+      setAmountInvested(Number(fin.amountInvested ?? 0));
+      setExpectedProfit(Number(fin.expectedProfit ?? 0));
+      setRealizedProfit(Number(fin.realizedProfit ?? 0));
+      setRealizedRoiPercent(Number(fin.realizedRoiPercent ?? 0));
+      setLoadingFinance(false);
+
+      // costs
+      setTotalCosts(pickTotalCosts(costs));
+      setLoadingCosts(false);
+
+      // ✅ tempinho pro spinner ficar visível (igual Home)
+      await wait(250);
+    } catch (err: any) {
+      console.log(
+        "❌ [OperationDetails] loadData error",
+        err?.response?.status,
+        err?.response?.data,
+        err?.message ?? err
+      );
+
+      // não trava a tela; só desliga loaders
+      setLoadingFinance(false);
+      setLoadingCosts(false);
     }
+  }, [
+    validOperationId,
+    financeKey,
+    costsKey,
+    operation.id,
+    roiExpectedPercent,
+  ]);
 
-    let alive = true;
+  // ✅ 1 linha: ativa pull-to-refresh
+  useScreenRefresh(loadData);
 
-    getOrFetch(
-      key,
-      async () => {
-        const res = await api.get(`/operation-costs/${operation.id}`, {
-          timeout: 30000,
-        });
-        return res.data ?? {};
-      }
-    )
-      .then((d) => {
-        if (!alive) return;
-
-        // ✅ LOG ÚTIL pra você ver o shape real
-        console.log("🟦 [OperationDetails] /operation-costs payload =", d);
-
-        const parsed = pickTotalCosts(d);
-        setTotalCosts(parsed);
-      })
-      .catch((err) => {
-        console.log(
-          "❌ [OperationDetails] erro ao buscar totalCosts",
-          err?.response?.status,
-          err?.response?.data,
-          err?.message ?? err
-        );
-      })
-      .finally(() => {
-        if (!alive) return;
-        setLoadingCosts(false);
-      });
-
-    return () => {
-      alive = false;
-    };
-  }, [validOperationId, operation.id]);
+  // ✅ carrega ao entrar/voltar
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   function goToTimeline() {
     if (!validOperationId) {
@@ -315,11 +311,14 @@ function OperationDetailsScreen({ navigation, route }: Props) {
       );
       return;
     }
-    navigation.navigate("OperationTimeline" as never, {
-      id: String(operation.id),
-      name: String(operation.name),
-      status: statusParam,
-    } as never);
+    navigation.navigate(
+      "OperationTimeline" as never,
+      {
+        id: String(operation.id),
+        name: String(operation.name),
+        status: statusParam,
+      } as never
+    );
   }
 
   function goToCosts() {
@@ -330,10 +329,13 @@ function OperationDetailsScreen({ navigation, route }: Props) {
       );
       return;
     }
-    navigation.navigate("OperationCosts" as never, {
-      id: String(operation.id),
-      name: String(operation.name),
-    } as never);
+    navigation.navigate(
+      "OperationCosts" as never,
+      {
+        id: String(operation.id),
+        name: String(operation.name),
+      } as never
+    );
   }
 
   function handleOpenDoc(url: string | null, label: string) {
@@ -345,186 +347,168 @@ function OperationDetailsScreen({ navigation, route }: Props) {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Header padrão */}
-        <View style={styles.headerRow}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            activeOpacity={0.8}
-            style={styles.backBtn}
+    <Screen title="" padding={16} contentTopOffset={0}>
+     
+
+      {!validOperationId && (
+        <View style={styles.warnBox}>
+          <Text style={styles.warnTitle}>ID da operação inválido</Text>
+          <Text style={styles.warnText}>
+            O app recebeu um ID inválido. Por isso, os dados não serão carregados.
+          </Text>
+          <Text style={styles.warnText}>ID recebido: {String(operation.id)}</Text>
+        </View>
+      )}
+
+      <View style={styles.header}>
+        <Text style={styles.title}>Detalhes da operação</Text>
+        <Text style={styles.subtitle}>
+          Acompanhe de perto o andamento da sua operação.
+        </Text>
+      </View>
+
+      <View style={styles.mainCard}>
+        <Text style={styles.propertyName}>{operation.name}</Text>
+        <Text style={styles.location}>
+          {operation.city} - {operation.state}
+        </Text>
+
+        <View style={styles.statusRow}>
+          <View
+            style={[
+              styles.chip,
+              statusParam === "concluida"
+                ? styles.statusChipFinished
+                : styles.statusChipActive,
+            ]}
           >
-            <Text style={styles.backText}>← Voltar</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.headerTitle}></Text>
-          <View style={{ width: 70 }} />
+            <Text style={styles.chipText}>{operation.status}</Text>
+          </View>
         </View>
 
-        {!validOperationId && (
-          <View style={styles.warnBox}>
-            <Text style={styles.warnTitle}>ID da operação inválido</Text>
-            <Text style={styles.warnText}>
-              O app recebeu um ID inválido. Por isso, os dados não serão carregados.
+        <View style={styles.termColumn}>
+          <View style={styles.chip}>
+            <Text style={styles.chipText}>
+              Prazo estimado: {operation.estimatedTerm}
             </Text>
-            <Text style={styles.warnText}>ID recebido: {String(operation.id)}</Text>
-          </View>
-        )}
-
-        <View style={styles.header}>
-          <Text style={styles.title}>Detalhes da operação</Text>
-          <Text style={styles.subtitle}>
-            Acompanhe de perto o andamento da sua operação.
-          </Text>
-        </View>
-
-        <View style={styles.mainCard}>
-          <Text style={styles.propertyName}>{operation.name}</Text>
-          <Text style={styles.location}>
-            {operation.city} - {operation.state}
-          </Text>
-
-          <View style={styles.statusRow}>
-            <View
-              style={[
-                styles.chip,
-                statusParam === "concluida"
-                  ? styles.statusChipFinished
-                  : styles.statusChipActive,
-              ]}
-            >
-              <Text style={styles.chipText}>{operation.status}</Text>
-            </View>
           </View>
 
-          <View style={styles.termColumn}>
-            <View style={styles.chip}>
+          {isFinished && operation.realizedTerm !== "—" && (
+            <View style={[styles.chip, styles.realizedTermChip]}>
               <Text style={styles.chipText}>
-                Prazo estimado: {operation.estimatedTerm}
+                Prazo realizado: {operation.realizedTerm}
               </Text>
             </View>
-
-            {isFinished && operation.realizedTerm !== "—" && (
-              <View style={[styles.chip, styles.realizedTermChip]}>
-                <Text style={styles.chipText}>
-                  Prazo realizado: {operation.realizedTerm}
-                </Text>
-              </View>
-            )}
-          </View>
-
-          <TouchableOpacity
-            style={styles.timelineLink}
-            activeOpacity={0.8}
-            onPress={goToTimeline}
-          >
-            <Text style={styles.timelineLinkText}>Ver linha do tempo →</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Resumo financeiro */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Resumo financeiro</Text>
-
-          <View style={styles.metricsRow}>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Valor investido</Text>
-              <Text style={styles.metricValue}>
-                {loadingFinance ? "Carregando..." : formatCurrency(amountInvested)}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.metricsRow}>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Lucro esperado</Text>
-              <Text style={styles.metricValue}>
-                {loadingFinance ? "Carregando..." : formatCurrency(expectedProfit)}
-              </Text>
-            </View>
-
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>ROI % esperado</Text>
-              <Text style={styles.metricValue}>{`${roiExpectedPercent.toFixed(1)}%`}</Text>
-            </View>
-          </View>
-
-          <View style={styles.metricsRow}>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Lucro realizado</Text>
-              <Text style={styles.metricValue}>
-                {loadingFinance
-                  ? "Carregando..."
-                  : isFinished
-                  ? formatCurrency(realizedProfit)
-                  : "—"}
-              </Text>
-            </View>
-
-            <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>ROI % realizado</Text>
-              <Text style={styles.metricValue}>
-                {loadingFinance
-                  ? "Carregando..."
-                  : isFinished
-                  ? `${realizedRoiPercent.toFixed(1)}%`
-                  : "—"}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Custos */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Custos do projeto</Text>
-
-          <TouchableOpacity
-            style={styles.costCard}
-            activeOpacity={0.8}
-            onPress={goToCosts}
-          >
-            <Text style={styles.metricLabel}>Total de custos</Text>
-            <Text style={styles.metricValue}>
-              {loadingCosts ? "Carregando..." : formatCurrency(totalCosts)}
-            </Text>
-            <Text style={styles.costHint}>Ver custos detalhados →</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Documentos */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Documentos e anexos</Text>
-
-          <View style={styles.docsCard}>
-            <DocRow
-              label="Carta de arrematação"
-              available={!!cartaUrl}
-              onPress={() => handleOpenDoc(cartaUrl, "Carta de arrematação")}
-            />
-
-            <View style={styles.docDivider} />
-
-            <DocRow
-              label="Matrícula consolidada"
-              available={!!matriculaUrl}
-              onPress={() => handleOpenDoc(matriculaUrl, "Matrícula consolidada")}
-            />
-
-            <View style={styles.docDivider} />
-
-            <DocRow
-              label="Contrato SCP"
-              available={!!contratoScpUrl}
-              onPress={() => handleOpenDoc(contratoScpUrl, "Contrato SCP")}
-            />
-          </View>
-
-          {!cartaUrl && !matriculaUrl && !contratoScpUrl && (
-            <Text style={styles.docsEmptyHint}>Ainda não disponível.</Text>
           )}
         </View>
-      </ScrollView>
-    </SafeAreaView>
+
+        <TouchableOpacity
+          style={styles.timelineLink}
+          activeOpacity={0.8}
+          onPress={goToTimeline}
+        >
+          <Text style={styles.timelineLinkText}>Ver linha do tempo →</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Resumo financeiro */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Resumo financeiro</Text>
+
+        <View style={styles.metricsRow}>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>Valor investido</Text>
+            <Text style={styles.metricValue}>
+              {loadingFinance ? "Carregando..." : formatCurrency(amountInvested)}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.metricsRow}>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>Lucro esperado</Text>
+            <Text style={styles.metricValue}>
+              {loadingFinance ? "Carregando..." : formatCurrency(expectedProfit)}
+            </Text>
+          </View>
+
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>ROI % esperado</Text>
+            <Text style={styles.metricValue}>{`${roiExpectedPercent.toFixed(1)}%`}</Text>
+          </View>
+        </View>
+
+        <View style={styles.metricsRow}>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>Lucro realizado</Text>
+            <Text style={styles.metricValue}>
+              {loadingFinance
+                ? "Carregando..."
+                : isFinished
+                ? formatCurrency(realizedProfit)
+                : "—"}
+            </Text>
+          </View>
+
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>ROI % realizado</Text>
+            <Text style={styles.metricValue}>
+              {loadingFinance
+                ? "Carregando..."
+                : isFinished
+                ? `${realizedRoiPercent.toFixed(1)}%`
+                : "—"}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Custos */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Custos do projeto</Text>
+
+        <TouchableOpacity style={styles.costCard} activeOpacity={0.8} onPress={goToCosts}>
+          <Text style={styles.metricLabel}>Total de custos</Text>
+          <Text style={styles.metricValue}>
+            {loadingCosts ? "Carregando..." : formatCurrency(totalCosts)}
+          </Text>
+          <Text style={styles.costHint}>Ver custos detalhados →</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Documentos */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Documentos e anexos</Text>
+
+        <View style={styles.docsCard}>
+          <DocRow
+            label="Carta de arrematação"
+            available={!!cartaUrl}
+            onPress={() => handleOpenDoc(cartaUrl, "Carta de arrematação")}
+          />
+
+          <View style={styles.docDivider} />
+
+          <DocRow
+            label="Matrícula consolidada"
+            available={!!matriculaUrl}
+            onPress={() => handleOpenDoc(matriculaUrl, "Matrícula consolidada")}
+          />
+
+          <View style={styles.docDivider} />
+
+          <DocRow
+            label="Contrato SCP"
+            available={!!contratoScpUrl}
+            onPress={() => handleOpenDoc(contratoScpUrl, "Contrato SCP")}
+          />
+        </View>
+
+        {!cartaUrl && !matriculaUrl && !contratoScpUrl && (
+          <Text style={styles.docsEmptyHint}>Ainda não disponível.</Text>
+        )}
+      </View>
+    </Screen>
   );
 }
 

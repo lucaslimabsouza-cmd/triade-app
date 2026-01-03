@@ -1,23 +1,18 @@
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  FlatList,
-  TouchableOpacity,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-
-import TriadeLoading from "../ui/TriadeLoading";
-import AppHeader from "../ui/AppHeader";
-import { api } from "../services/api";
-
+import React, { useCallback, useMemo, useState } from "react";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { AppStackParamList } from "../navigation/types";
+import { useFocusEffect } from "@react-navigation/native";
 
+import { AppStackParamList } from "../navigation/types";
+import Screen from "./Screen";
+import TriadeLoading from "../ui/TriadeLoading";
+
+import { api } from "../services/api";
 import { cacheGet, getOrFetch } from "../cache/memoryCache";
 import { CACHE_KEYS } from "../cache/cacheKeys";
+
+// ✅ pull-to-refresh (1 linha)
+import { useScreenRefresh } from "../refresh/useScreenRefresh";
 
 const MAIN_BLUE = "#0E2A47";
 
@@ -56,29 +51,34 @@ type OperationFinancial = {
 
 type Props = NativeStackScreenProps<AppStackParamList, "Operations">;
 
+function roiToPercent(roi: any) {
+  const r = Number(roi ?? 0);
+  return r < 1 ? r * 100 : r;
+}
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export function OperationsScreen({ navigation }: Props) {
-  const [operations, setOperations] = useState<Operation[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [operations, setOperations] = useState<Operation[]>(() => {
+    const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
+    return cachedOps && Array.isArray(cachedOps) ? cachedOps : [];
+  });
+
+  const [loading, setLoading] = useState(() => {
+    const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
+    return !(cachedOps && Array.isArray(cachedOps) && cachedOps.length > 0);
+  });
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // ✅ guarda financeiro por operação (mesmo payload da tela de detalhes)
-  const [financialById, setFinancialById] = useState<
-    Record<string, OperationFinancial | undefined>
-  >({});
-  const [loadingFinancialIds, setLoadingFinancialIds] = useState<
-    Record<string, boolean>
-  >({});
+  // ✅ financeiro por operação
+  const [financialById, setFinancialById] = useState<Record<string, OperationFinancial | undefined>>(
+    {}
+  );
+  const [loadingFinancialIds, setLoadingFinancialIds] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    let alive = true;
-
-    // helper: calcula ROI esperado percent para enviar no endpoint
-    const roiToPercent = (roi: any) => {
-      const r = Number(roi ?? 0);
-      return r < 1 ? r * 100 : r;
-    };
-
-    async function loadFinancialForOperations(ops: Operation[], stillAlive: boolean) {
+  const loadFinancialForOperations = useCallback(
+    async (ops: Operation[]) => {
       if (!ops || ops.length === 0) return;
 
       // marca loading só dos que ainda não tem no state
@@ -87,7 +87,8 @@ export function OperationsScreen({ navigation }: Props) {
         const id = String(op.id);
         if (!financialById[id]) initialLoading[id] = true;
       });
-      if (stillAlive && Object.keys(initialLoading).length > 0) {
+
+      if (Object.keys(initialLoading).length > 0) {
         setLoadingFinancialIds((prev) => ({ ...prev, ...initialLoading }));
       }
 
@@ -97,39 +98,34 @@ export function OperationsScreen({ navigation }: Props) {
 
           // se já tem no state, não refaz
           if (financialById[id]) {
-            if (stillAlive) {
-              setLoadingFinancialIds((prev) => ({ ...prev, [id]: false }));
-            }
+            setLoadingFinancialIds((prev) => ({ ...prev, [id]: false }));
             return;
           }
 
           try {
             const roiExpectedPercent = roiToPercent(op.roi);
 
-            const fin = await getOrFetch(
-              CACHE_KEYS.OP_FINANCIAL(id),
-              async () => {
-                const res = await api.get(`/operation-financial/${id}`, {
-                  params: { roi_expected: roiExpectedPercent },
-                  timeout: 30000,
-                });
+            // ✅ alinha a chave com o padrão do Home (evita cache errado por ROI diferente)
+            const key = CACHE_KEYS.OP_FINANCIAL(id, roiExpectedPercent);
 
-                const d = res.data ?? {};
-                const payload: OperationFinancial = {
-                  amountInvested: Number(d.amountInvested ?? 0),
-                  expectedProfit: Number(d.expectedProfit ?? 0),
-                  realizedProfit: Number(d.realizedProfit ?? 0),
-                  realizedRoiPercent: Number(d.realizedRoiPercent ?? 0),
-                  roiExpectedPercent: Number(d.roiExpectedPercent ?? roiExpectedPercent ?? 0),
-                };
-                return payload;
-              }
-              // sem force: usa cache em memória
-            );
+            const fin = await getOrFetch(key, async () => {
+              const res = await api.get(`/operation-financial/${id}`, {
+                params: { roi_expected: roiExpectedPercent },
+                timeout: 30000,
+              });
 
-            if (stillAlive) {
-              setFinancialById((prev) => ({ ...prev, [id]: fin }));
-            }
+              const d = res.data ?? {};
+              const payload: OperationFinancial = {
+                amountInvested: Number(d.amountInvested ?? 0),
+                expectedProfit: Number(d.expectedProfit ?? 0),
+                realizedProfit: Number(d.realizedProfit ?? 0),
+                realizedRoiPercent: Number(d.realizedRoiPercent ?? 0),
+                roiExpectedPercent: Number(d.roiExpectedPercent ?? roiExpectedPercent ?? 0),
+              };
+              return payload;
+            });
+
+            setFinancialById((prev) => ({ ...prev, [id]: fin }));
           } catch (err: any) {
             console.log(
               "❌ [OperationsScreen] erro financeiro",
@@ -139,62 +135,59 @@ export function OperationsScreen({ navigation }: Props) {
               err?.message ?? err
             );
           } finally {
-            if (stillAlive) {
-              setLoadingFinancialIds((prev) => ({ ...prev, [id]: false }));
-            }
+            setLoadingFinancialIds((prev) => ({ ...prev, [id]: false }));
           }
         })
       );
-    }
+    },
+    [financialById]
+  );
 
-    async function load() {
-      try {
-        setErrorMsg(null);
-        if (!alive) return;
+  const loadData = useCallback(async () => {
+    try {
+      setErrorMsg(null);
 
-        // ✅ 1) Mostra cache IMEDIATO (sem TriadeLoading piscando)
-        const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
-        if (cachedOps && cachedOps.length > 0 && alive) {
-          setOperations(cachedOps);
-          setLoading(false); // evita tela inteira de loading
-          // carrega financial em background (também com cache)
-          loadFinancialForOperations(cachedOps, alive);
-        } else {
-          setLoading(true);
-        }
-
-        // ✅ 2) Garante dados (cache ou servidor)
-        const ops = await getOrFetch(
-          CACHE_KEYS.OPERATIONS,
-          async () => {
-            const res = await api.get("/operations");
-            const data = (res.data ?? []) as Operation[];
-            return Array.isArray(data) ? data : [];
-          }
-        );
-
-        if (!alive) return;
-        setOperations(ops);
-
-        // mantém seu comportamento atual
-        await loadFinancialForOperations(ops, alive);
-      } catch (err: any) {
-        console.log("❌ [OperationsScreen] load error:", err?.message, err?.response?.data);
-        if (!alive) return;
-        setOperations([]);
-        setErrorMsg("Não foi possível carregar as operações do servidor.");
-      } finally {
-        if (!alive) return;
+      // ✅ mostra cache imediato (se tiver)
+      const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
+      if (cachedOps && cachedOps.length > 0) {
+        setOperations(cachedOps);
         setLoading(false);
+        // financeiro em background
+        loadFinancialForOperations(cachedOps);
+      } else {
+        if (operations.length === 0) setLoading(true);
       }
-    }
 
-    load();
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      // ✅ garante dados (cache ou servidor)
+      const ops = await getOrFetch(CACHE_KEYS.OPERATIONS, async () => {
+        const res = await api.get("/operations", { timeout: 30000 });
+        const data = (res.data ?? []) as Operation[];
+        return Array.isArray(data) ? data : [];
+      });
+
+      setOperations(ops);
+      await loadFinancialForOperations(ops);
+
+      // ✅ deixa o refresh “visível” (igual Home)
+      await wait(250);
+    } catch (err: any) {
+      console.log("❌ [OperationsScreen] load error:", err?.message, err?.response?.data);
+      setOperations([]);
+      setErrorMsg("Não foi possível carregar as operações do servidor.");
+    } finally {
+      setLoading(false);
+    }
+  }, [loadFinancialForOperations, operations.length, operations]);
+
+  // ✅ 1 linha: ativa pull-to-refresh
+  useScreenRefresh(loadData);
+
+  // ✅ carrega ao entrar/voltar
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const { activeOps, finishedOps } = useMemo(() => {
     const active = operations.filter((op) => op.status === "em_andamento");
@@ -237,79 +230,79 @@ export function OperationsScreen({ navigation }: Props) {
     } as any);
   }
 
-  if (loading) return <TriadeLoading />;
+  if (loading) {
+    return (
+      <Screen title="" padding={16} contentTopOffset={0}>
+        <View style={{ flex: 1, backgroundColor: MAIN_BLUE }}>
+          <TriadeLoading />
+        </View>
+      </Screen>
+    );
+  }
 
   const hasNone = !errorMsg && activeOps.length === 0 && finishedOps.length === 0;
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <AppHeader title="" onBack={() => navigation.goBack()} />
+    <Screen title="" padding={16} contentTopOffset={0}>
+      <Text style={styles.title}>Minhas operações</Text>
+      <Text style={styles.subtitle}>Aqui você vê o detalhe de cada operação que investiu.</Text>
 
-        <Text style={styles.title}>Minhas operações</Text>
-        <Text style={styles.subtitle}>
-          Aqui você vê o detalhe de cada operação que investiu.
-        </Text>
+      {!!errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
 
-        {!!errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
+      {hasNone && (
+        <Text style={styles.emptyText}>Você ainda não possui operações cadastradas.</Text>
+      )}
 
-        {hasNone && (
-          <Text style={styles.emptyText}>
-            Você ainda não possui operações cadastradas.
+      {activeOps.length > 0 && !errorMsg && (
+        <>
+          <Text style={styles.sectionTitle}>Operações em andamento</Text>
+          <FlatList
+            data={activeOps}
+            keyExtractor={(item) => String(item.id)}
+            scrollEnabled={false}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            renderItem={({ item }) => {
+              const id = String(item.id);
+              return (
+                <TouchableOpacity onPress={() => openDetails(item)} activeOpacity={0.85}>
+                  <OperationCard
+                    operation={item}
+                    financial={financialById[id]}
+                    loadingFinancial={!!loadingFinancialIds[id]}
+                  />
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </>
+      )}
+
+      {finishedOps.length > 0 && !errorMsg && (
+        <>
+          <Text style={[styles.sectionTitle, styles.finishedSectionTitle]}>
+            Operações finalizadas
           </Text>
-        )}
-
-        {activeOps.length > 0 && !errorMsg && (
-          <>
-            <Text style={styles.sectionTitle}>Operações em andamento</Text>
-            <FlatList
-              data={activeOps}
-              keyExtractor={(item) => String(item.id)}
-              scrollEnabled={false}
-              ItemSeparatorComponent={() => <View style={styles.separator} />}
-              renderItem={({ item }) => {
-                const id = String(item.id);
-                return (
-                  <TouchableOpacity onPress={() => openDetails(item)} activeOpacity={0.85}>
-                    <OperationCard
-                      operation={item}
-                      financial={financialById[id]}
-                      loadingFinancial={!!loadingFinancialIds[id]}
-                    />
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          </>
-        )}
-
-        {finishedOps.length > 0 && !errorMsg && (
-          <>
-            <Text style={[styles.sectionTitle, styles.finishedSectionTitle]}>
-              Operações finalizadas
-            </Text>
-            <FlatList
-              data={finishedOps}
-              keyExtractor={(item) => String(item.id)}
-              scrollEnabled={false}
-              ItemSeparatorComponent={() => <View style={styles.separator} />}
-              renderItem={({ item }) => {
-                const id = String(item.id);
-                return (
-                  <TouchableOpacity onPress={() => openDetails(item)} activeOpacity={0.85}>
-                    <OperationCard
-                      operation={item}
-                      financial={financialById[id]}
-                      loadingFinancial={!!loadingFinancialIds[id]}
-                    />
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          </>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+          <FlatList
+            data={finishedOps}
+            keyExtractor={(item) => String(item.id)}
+            scrollEnabled={false}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            renderItem={({ item }) => {
+              const id = String(item.id);
+              return (
+                <TouchableOpacity onPress={() => openDetails(item)} activeOpacity={0.85}>
+                  <OperationCard
+                    operation={item}
+                    financial={financialById[id]}
+                    loadingFinancial={!!loadingFinancialIds[id]}
+                  />
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </>
+      )}
+    </Screen>
   );
 }
 
@@ -403,8 +396,6 @@ function formatCurrency(value: number): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: MAIN_BLUE },
-
-  content: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 48 },
 
   title: { fontSize: 22, color: "#FFFFFF", fontWeight: "600" },
   subtitle: { fontSize: 14, color: "#D0D7E3", marginTop: 4, marginBottom: 16 },

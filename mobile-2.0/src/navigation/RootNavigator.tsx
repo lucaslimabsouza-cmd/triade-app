@@ -6,6 +6,9 @@ import { AppNavigator } from "./app/AppNavigator";
 import { tokenStorage } from "../storage/tokenStorage";
 import { biometryStorage } from "../storage/biometryStorage";
 
+// ✅ NOVO: Provider do pull-to-refresh global
+import { RefreshRegistryProvider } from "../refresh/RefreshRegistry";
+
 export type RootStackParamList = {
   Auth: undefined;
   App: undefined;
@@ -26,29 +29,31 @@ export function RootNavigator() {
   }
 
   return (
-    <Stack.Navigator
-      key={signedIn ? "app" : "auth"} // ✅ Passo 4: força remount ao trocar
-      screenOptions={{ headerShown: false }}
-    >
-      {!signedIn ? (
-        <Stack.Screen name="Auth">
-          {(props) => (
-            <AuthNavigator
-              {...props}
-              onSignedIn={() => {
-                console.log("🧭 [RootNavigator] setSignedIn(true)");
-                setSignedIn(true);
-              }}
-              onLogout={handleLogout}
-            />
-          )}
-        </Stack.Screen>
-      ) : (
-        <Stack.Screen name="App">
-          {(props) => <AppNavigator {...props} onLogout={handleLogout} />}
-        </Stack.Screen>
-      )}
-    </Stack.Navigator>
+    <RefreshRegistryProvider>
+      <Stack.Navigator
+        key={signedIn ? "app" : "auth"} // ✅ força remount ao trocar
+        screenOptions={{ headerShown: false }}
+      >
+        {!signedIn ? (
+          <Stack.Screen name="Auth">
+            {(props) => (
+              <AuthNavigator
+                {...props}
+                onSignedIn={() => {
+                  console.log("🧭 [RootNavigator] setSignedIn(true)");
+                  setSignedIn(true);
+                }}
+                onLogout={handleLogout}
+              />
+            )}
+          </Stack.Screen>
+        ) : (
+          <Stack.Screen name="App">
+            {(props) => <AppNavigator {...props} onLogout={handleLogout} />}
+          </Stack.Screen>
+        )}
+      </Stack.Navigator>
+    </RefreshRegistryProvider>
   );
 }
 

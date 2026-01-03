@@ -22,6 +22,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { AppStackParamList } from "../navigation/types";
 import Screen from "./Screen";
 
+// ✅ PASSO 5: hook 1-linha por tela
+import { useScreenRefresh } from "../refresh/useScreenRefresh";
+
 import TriadeLoading from "../ui/TriadeLoading";
 
 import { api } from "../services/api";
@@ -493,6 +496,37 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     }
   }, []);
 
+  // ✅ PASSO 5 (parte principal):
+  // Função única que a Home registra pro pull-to-refresh
+  const loadHomeData = useCallback(async () => {
+    // tenta mostrar cache rápido (sem “piscar”)
+    const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
+    if (cachedOps && Array.isArray(cachedOps)) {
+      setOperations(cachedOps);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    // atualiza badge + notificações em paralelo
+    await Promise.all([fetchUnreadCount(), fetchNotifications()]);
+
+    // busca operações "fresh"
+    try {
+      const res = await api.get("/operations", { timeout: 30000 });
+      const data = (res.data ?? []) as Operation[];
+      const ops = Array.isArray(data) ? data : [];
+      setOperations(ops);
+    } catch {
+      setOperations((prev) => (prev?.length ? prev : []));
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchUnreadCount, fetchNotifications]);
+
+  // ✅ 1 linha: registra a função acima para o pull-to-refresh
+  useScreenRefresh(loadHomeData);
+
   // ✅ Atualiza badge e lista quando a Home ganha foco (voltar de notificações, abrir app, etc.)
   useFocusEffect(
     useCallback(() => {
@@ -547,44 +581,10 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     };
   }, []);
 
-  // /operations
+  // ✅ /operations (agora reutiliza a mesma função do refresh)
   useEffect(() => {
-    let alive = true;
-
-    async function loadOperations() {
-      try {
-        const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
-        if (cachedOps && Array.isArray(cachedOps)) {
-          if (!alive) return;
-          setOperations(cachedOps);
-          setLoading(false);
-        } else {
-          if (!alive) return;
-          setLoading(true);
-        }
-
-        const ops = await getOrFetch(CACHE_KEYS.OPERATIONS, async () => {
-          const res = await api.get("/operations", { timeout: 30000 });
-          const data = (res.data ?? []) as Operation[];
-          return Array.isArray(data) ? data : [];
-        });
-
-        if (!alive) return;
-        setOperations(ops);
-      } catch {
-        if (!alive) return;
-        setOperations((prev) => (prev?.length ? prev : []));
-      } finally {
-        if (!alive) return;
-        setLoading(false);
-      }
-    }
-
-    loadOperations();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    loadHomeData();
+  }, [loadHomeData]);
 
   // financeiro
   useEffect(() => {
@@ -947,7 +947,9 @@ export function HomeScreen({ navigation, onLogout }: Props) {
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.sheetSubtitle}>Como você prefere ser atendido pela sua assessoria?</Text>
+          <Text style={styles.sheetSubtitle}>
+            Como você prefere ser atendido pela sua assessoria?
+          </Text>
 
           <TouchableOpacity style={styles.sheetRow} activeOpacity={0.85} onPress={openEmail}>
             <View style={styles.sheetIcon}>
