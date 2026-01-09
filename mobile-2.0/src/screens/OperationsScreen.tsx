@@ -29,6 +29,9 @@ type Operation = {
   state?: string;
   status?: "em_andamento" | "concluida" | string;
 
+  // ✅ NOVO: foto já normalizada pelo backend
+  photoUrl?: string | null;
+
   // campos antigos (fallback)
   amountInvested?: number;
   totalInvestment?: number;
@@ -124,7 +127,6 @@ export function OperationsScreen({ navigation }: Props) {
                 };
                 return payload;
               }
-              // sem force: usa cache em memória
             );
 
             if (stillAlive) {
@@ -152,12 +154,11 @@ export function OperationsScreen({ navigation }: Props) {
         setErrorMsg(null);
         if (!alive) return;
 
-        // ✅ 1) Mostra cache IMEDIATO (sem TriadeLoading piscando)
+        // ✅ 1) Mostra cache IMEDIATO
         const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
         if (cachedOps && cachedOps.length > 0 && alive) {
           setOperations(cachedOps);
-          setLoading(false); // evita tela inteira de loading
-          // carrega financial em background (também com cache)
+          setLoading(false);
           loadFinancialForOperations(cachedOps, alive);
         } else {
           setLoading(true);
@@ -176,7 +177,6 @@ export function OperationsScreen({ navigation }: Props) {
         if (!alive) return;
         setOperations(ops);
 
-        // mantém seu comportamento atual
         await loadFinancialForOperations(ops, alive);
       } catch (err: any) {
         console.log("❌ [OperationsScreen] load error:", err?.message, err?.response?.data);
@@ -234,6 +234,9 @@ export function OperationsScreen({ navigation }: Props) {
       matriculaConsolidada: String(matriculaConsolidada),
       contratoScp: docs.contratoScp ?? "",
       roiExpectedPercent: String(roiPercentExpected),
+
+      // ✅ NOVO
+      photoUrl: op.photoUrl ?? null,
     } as any);
   }
 

@@ -6,9 +6,7 @@ import * as XLSX from "xlsx";
 
 const router = Router();
 
-router.get("/_test", (_req, res) =>
-  res.json({ ok: true, route: "excel-sync" })
-);
+router.get("/_test", (_req, res) => res.json({ ok: true, route: "excel-sync" }));
 
 /**
  * =========================
@@ -73,6 +71,30 @@ function extractSCP(description: any): string | null {
 }
 
 /**
+ * ✅ Normaliza URL de imagem do Google Drive para URL direta
+ * (funciona com React Native <Image uri=...>)
+ */
+function normalizeDriveImageUrl(raw?: any): string | null {
+  const url = String(raw ?? "").trim();
+  if (!url) return null;
+
+  // Já está no formato direto
+  if (url.includes("drive.google.com/uc?export=download&id=")) return url;
+
+  // Formato: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+  const m1 = url.match(/drive\.google\.com\/file\/d\/([^/]+)/i);
+  if (m1?.[1]) return `https://drive.google.com/uc?export=download&id=${m1[1]}`;
+
+  // Formato: https://drive.google.com/open?id=FILE_ID
+  // ou qualquer URL com ?id=FILE_ID
+  const m2 = url.match(/[?&]id=([^&]+)/i);
+  if (m2?.[1]) return `https://drive.google.com/uc?export=download&id=${m2[1]}`;
+
+  // fallback (caso já seja um link direto de outro lugar)
+  return url;
+}
+
+/**
  * =========================
  * HELPERS – NOTIFICATIONS
  * =========================
@@ -112,9 +134,7 @@ function toDateTimeISO(value: any): string | null {
     const hh = br[4] ?? "00";
     const mi = br[5] ?? "00";
     const ss = br[6] ?? "00";
-    return new Date(
-      `${br[3]}-${br[2]}-${br[1]}T${hh}:${mi}:${ss}Z`
-    ).toISOString();
+    return new Date(`${br[3]}-${br[2]}-${br[1]}T${hh}:${mi}:${ss}Z`).toISOString();
   }
 
   return null;
@@ -159,6 +179,14 @@ router.post("/operations", async (_req, res) => {
         continue;
       }
 
+      const photoUrl = normalizeDriveImageUrl(
+        row["Link Foto do imóvel"] ??
+          row["Link da foto"] ??
+          row["Foto do Imóvel"] ??
+          row["Foto"] ??
+          row["photo_url"]
+      );
+
       const payload: any = {
         code,
         name: desc ?? "Operação",
@@ -186,6 +214,9 @@ router.post("/operations", async (_req, res) => {
         link_arrematacao: row["Link Carta de arrematação"] ?? null,
         link_matricula: row["Link Matricula consolidada"] ?? null,
         link_contrato_scp: row["Link Contrato Scp"] ?? null,
+
+        // ✅ COLUNA CERTA (conforme sua tabela): photo_url
+        photo_url: photoUrl,
       };
 
       const { error } = await supabaseAdmin
@@ -204,6 +235,7 @@ router.post("/operations", async (_req, res) => {
       totalRows: rows.length,
     });
   } catch (err: any) {
+    console.error("❌ [sync/excel/operations] route error:", err);
     return res.status(500).json({
       ok: false,
       error: err?.message ?? "Erro desconhecido no sync do Excel",
@@ -277,6 +309,7 @@ router.post("/notifications", async (_req, res) => {
       totalRows: rows.length,
     });
   } catch (err: any) {
+    console.error("❌ [sync/excel/notifications] route error:", err);
     return res.status(500).json({
       ok: false,
       error: err?.message ?? "Erro desconhecido no sync de notifications",

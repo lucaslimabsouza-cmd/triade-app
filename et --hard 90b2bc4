@@ -1,0 +1,22 @@
+[33m1c3f465[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mstable-testflight[m[33m, [m[1;31morigin/stable-testflight[m[33m)[m Login + notificações + telas + Atualização - OK
+[33m90b2bc4[m Login + Telas + Notificações + Push - OK
+[33maa3563c[m Login + Push + telas Ok
+[33m3963353[m Login+Home(completa)+telas+Extrato-OK
+[33m1a85c7e[m Login + telas + extrato OK V2
+[33m0dffbc9[m Login + telas + extrato OK
+[33me4a368c[m Login + telas + extrato OK
+[33mdd8355c[m Login + Telas + Cache OK
+[33m689e7bd[m Login + telas OK - Básico
+[33ma05ad55[m[33m ([m[1;33mtag: [m[1;33mv29-12-pre-home-ok[m[33m)[m 29-12 - Login - Ok - Todas telas antes do home OK
+[33m39338bc[m 29-12- Login Ok, timeline OK, Custos totais OK SCP OK. Detalhes de operação OK
+[33m80a8f50[m 29-12- Login Ok, timeline OK, Custos totais OK SCP OK
+[33m7207eef[m 29-12- Login Ok, timeline OK, Custos totais OK SCP OK
+[33me211ef7[m Login, timeline e custos OK
+[33m0168995[m fix: remove duplicated description and normalize operation timeline
+[33m8d639dc[m[33m ([m[1;32mfix/operation-costs-category-name[m[33m)[m fix(operation-costs): debug and category name lookup
+[33ma938767[m QuickAccess + FaceID flow (SecureStore) e ajustes de navegação
+[33me3b2af1[m[33m ([m[1;33mtag: [m[1;33mv0.2.0-auth-stable[m[33m)[m Fix auth flow: login stable, remove AppNavigator default export, root remount logs
+[33m23c1e05[m[33m ([m[1;31morigin/master[m[33m, [m[1;32mmaster[m[33m)[m chore: bump ios buildNumber to 2
+[33m34bc569[m chore: apontar app para backend do Render em production
+[33mf23a77e[m feat: backend pronto para deploy no Render (Excel via Drive)
+[33m162fb98[m build: primeiro build iOS no TestFlight (v1.0.0)

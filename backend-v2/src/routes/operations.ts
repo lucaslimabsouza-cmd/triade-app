@@ -52,9 +52,7 @@ router.get("/", requireAuth, async (req: any, res) => {
 
   try {
     if (!cpfCnpj) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "cpf_cnpj ausente no token" });
+      return res.status(400).json({ ok: false, error: "cpf_cnpj ausente no token" });
     }
 
     // 1) Buscar party pelo CPF/CNPJ pra pegar omie_code
@@ -66,17 +64,13 @@ router.get("/", requireAuth, async (req: any, res) => {
 
     if (partyResp.error) {
       console.error("❌ [/operations] omie_parties error:", partyResp.error);
-      return res
-        .status(500)
-        .json({ ok: false, error: "Falha ao buscar party (omie_parties)" });
+      return res.status(500).json({ ok: false, error: "Falha ao buscar party (omie_parties)" });
     }
 
     const party = partyResp.data;
     console.log("🧩 [/operations] party =", party);
 
-    if (!party?.omie_code) {
-      return res.status(200).json([]);
-    }
+    if (!party?.omie_code) return res.status(200).json([]);
 
     const omieCode = norm(party.omie_code);
 
@@ -88,25 +82,16 @@ router.get("/", requireAuth, async (req: any, res) => {
 
     if (movesResp.error) {
       console.error("❌ [/operations] omie_mf_movements error:", movesResp.error);
-      return res.status(500).json({
-        ok: false,
-        error: "Falha ao buscar movimentos (omie_mf_movements)",
-      });
+      return res.status(500).json({ ok: false, error: "Falha ao buscar movimentos (omie_mf_movements)" });
     }
 
     const projectCodes = Array.from(
-      new Set(
-        (movesResp.data ?? [])
-          .map((m: any) => norm(m.cod_projeto))
-          .filter(Boolean)
-      )
+      new Set((movesResp.data ?? []).map((m: any) => norm(m.cod_projeto)).filter(Boolean))
     );
 
     console.log("🧩 [/operations] projectCodes =", projectCodes);
 
-    if (projectCodes.length === 0) {
-      return res.status(200).json([]);
-    }
+    if (projectCodes.length === 0) return res.status(200).json([]);
 
     // 3) Projetos -> pegar nome
     const projResp = await supabaseAdmin
@@ -116,26 +101,19 @@ router.get("/", requireAuth, async (req: any, res) => {
 
     if (projResp.error) {
       console.error("❌ [/operations] omie_projects error:", projResp.error);
-      return res
-        .status(500)
-        .json({ ok: false, error: "Falha ao buscar projetos (omie_projects)" });
+      return res.status(500).json({ ok: false, error: "Falha ao buscar projetos (omie_projects)" });
     }
 
     const projectNames = Array.from(
-      new Set(
-        (projResp.data ?? [])
-          .map((p: any) => norm(p.name))
-          .filter(Boolean)
-      )
+      new Set((projResp.data ?? []).map((p: any) => norm(p.name)).filter(Boolean))
     );
 
     console.log("🧩 [/operations] projectNames =", projectNames);
 
-    if (projectNames.length === 0) {
-      return res.status(200).json([]);
-    }
+    if (projectNames.length === 0) return res.status(200).json([]);
 
     // 4) Operações (planilha) -> filtra por name
+    // ✅ IMPORTANTE: não referenciar coluna "roi" aqui (não existe na tabela)
     const opsResp = await supabaseAdmin
       .from("operations")
       .select("*")
@@ -143,22 +121,10 @@ router.get("/", requireAuth, async (req: any, res) => {
 
     if (opsResp.error) {
       console.error("❌ [/operations] operations error:", opsResp.error);
-      return res
-        .status(500)
-        .json({ ok: false, error: "Falha ao buscar operações (operations)" });
+      return res.status(500).json({ ok: false, error: "Falha ao buscar operações (operations)" });
     }
 
     const ops = opsResp.data ?? [];
-
-    // ✅ DEBUG: confirmar se o Supabase está trazendo link_contrato_scp
-    // (isso aqui é o teste mais rápido e certeiro)
-    console.log(
-      "🧾 [/operations] links contrato scp:",
-      ops.map((o: any) => ({
-        name: o?.name,
-        link_contrato_scp: o?.link_contrato_scp,
-      }))
-    );
 
     // 5) Normalizar resposta pro app
     const normalized = ops.map((op: any) => {
@@ -178,14 +144,13 @@ router.get("/", requireAuth, async (req: any, res) => {
         state: op.state,
         status,
 
-        amountInvested: 0,
+        // ✅ ROI vem da planilha (coluna expected_roi)
+        roi: Number(op.expected_roi ?? 0),
 
-        roi: op.expected_roi ?? op.roi ?? 0,
-        realizedProfit: op.realized_profit ?? 0,
+        realizedProfit: Number(op.realized_profit ?? 0),
 
-        // Este campo é o que está no Excel/planilha.
         // Custos Omie ficam na rota separada /operation-costs
-        totalCosts: op.total_costs ?? 0,
+        totalCosts: Number(op.total_costs ?? 0),
 
         estimatedTerm: op.estimated_term_months ?? "",
         realizedTerm: op.realized_term_months ?? "",
@@ -193,9 +158,11 @@ router.get("/", requireAuth, async (req: any, res) => {
         documents: {
           cartaArrematacao: op.link_arrematacao ?? "",
           matriculaConsolidada: op.link_matricula ?? "",
-          // ✅ NOVO: Contrato SCP
           contratoScp: op.link_contrato_scp ?? "",
         },
+
+        // ✅ foto (coluna nova)
+        photoUrl: op.photo_url ?? null,
 
         // TIMELINE DATES (vêm da tabela operations)
         auction_date: op.auction_date ?? null,
@@ -213,9 +180,7 @@ router.get("/", requireAuth, async (req: any, res) => {
     return res.status(200).json(normalized);
   } catch (e: any) {
     console.error("💥 [/operations] UNHANDLED ERROR:", e);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Erro ao buscar operações" });
+    return res.status(500).json({ ok: false, error: "Erro ao buscar operações" });
   }
 });
 
