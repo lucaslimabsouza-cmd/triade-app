@@ -21,6 +21,8 @@ import meRouter from "./routes/me"; // ajuste o caminho
 import notificationsRouter from "./routes/notifications";
 import pushRouter from "./routes/push";
 import pushDispatchRouter from "./routes/push-dispatch";
+import passwordResetRouter from "./routes/passwordReset";
+
 
 
 
@@ -60,6 +62,7 @@ app.use(meRouter);
 app.use("/notifications", notificationsRouter);
 app.use("/push", pushRouter);
 app.use("/push", pushDispatchRouter);
+app.use(passwordResetRouter);
 
 
 
