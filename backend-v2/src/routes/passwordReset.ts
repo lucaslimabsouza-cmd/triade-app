@@ -17,16 +17,36 @@ function stripQuotes(v: any) {
   return String(v ?? "").replace(/^"+|"+$/g, "").trim();
 }
 
+function sanitizeEmailFrom(v: any) {
+  // remove aspas, quebras de linha e espaços duplicados
+  const raw = String(v ?? "");
+  const cleaned = raw
+    .replace(/^"+|"+$/g, "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return { raw, cleaned };
+}
+
+function isValidFromFormat(from: string) {
+  // email@dominio.com
+  const plain = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+
+  // Nome <email@dominio.com>
+  const named = /^.+\s<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>$/;
+
+  return plain.test(from) || named.test(from);
+}
+
 function getDeepLink(token: string) {
-  // triade://reset-password?token=...
-  const base = stripQuotes(process.env.APP_RESET_BASE_URL);
+  const base = stripQuotes(process.env.APP_RESET_BASE_URL); // triade://reset-password
   if (!base) throw new Error("APP_RESET_BASE_URL não configurado");
   return `${base}?token=${encodeURIComponent(token)}`;
 }
 
 function getPublicRedirectLink(token: string) {
-  // https://triade-backend.onrender.com/r/reset?token=...
-  const pub = stripQuotes(process.env.PUBLIC_BACKEND_URL);
+  const pub = stripQuotes(process.env.PUBLIC_BACKEND_URL); // https://triade-backend.onrender.com
   if (!pub) throw new Error("PUBLIC_BACKEND_URL não configurado");
   return `${pub.replace(/\/$/, "")}/r/reset?token=${encodeURIComponent(token)}`;
 }
@@ -50,7 +70,6 @@ function getMailerSMTP() {
     secure,
     auth: { user, pass },
 
-    // timeouts
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 10000,
@@ -65,15 +84,20 @@ async function sendEmail(params: { to: string; subject: string; text: string; ht
 
   // ✅ Preferência: Resend (HTTPS)
   if (resendKey) {
-    const fromRaw =
-      stripQuotes(process.env.RESEND_FROM) ||
-      "Triade <reset@espacopart.com.br>";
+    const fromEnv = process.env.RESEND_FROM || "Triade <reset@espacopart.com.br>";
+    const { raw, cleaned } = sanitizeEmailFrom(fromEnv);
+
+    if (!isValidFromFormat(cleaned)) {
+      console.log("[resend] INVALID RESEND_FROM raw =", JSON.stringify(raw));
+      console.log("[resend] INVALID RESEND_FROM cleaned =", JSON.stringify(cleaned));
+      throw new Error("RESEND_FROM inválido no env");
+    }
 
     try {
       const resp = await axios.post(
         "https://api.resend.com/emails",
         {
-          from: fromRaw,
+          from: cleaned,
           to: [params.to],
           subject: params.subject,
           text: params.text,
@@ -99,13 +123,11 @@ async function sendEmail(params: { to: string; subject: string; text: string; ht
 
   // 🔁 Fallback: SMTP (local/dev)
   const transporter = getMailerSMTP();
-  const from =
-    stripQuotes(process.env.MAIL_FROM) ||
-    stripQuotes(process.env.SMTP_FROM) ||
-    "Triade <reset@espacopart.com.br>";
+
+  const fromSMTP = stripQuotes(process.env.MAIL_FROM) || stripQuotes(process.env.SMTP_FROM) || "Triade <no-reply@triade.com.br>";
 
   await transporter.sendMail({
-    from,
+    from: fromSMTP,
     to: params.to,
     subject: params.subject,
     text: params.text,
@@ -290,13 +312,8 @@ router.post("/auth/reset-password", async (req, res) => {
 
     if (findErr || !authRow?.id) return res.status(400).json({ ok: false, error: "Token inválido" });
 
-    const expMs = authRow.reset_token_expires_at
-      ? new Date(authRow.reset_token_expires_at).getTime()
-      : 0;
-
-    if (!expMs || expMs < Date.now()) {
-      return res.status(400).json({ ok: false, error: "Token expirado" });
-    }
+    const expMs = authRow.reset_token_expires_at ? new Date(authRow.reset_token_expires_at).getTime() : 0;
+    if (!expMs || expMs < Date.now()) return res.status(400).json({ ok: false, error: "Token expirado" });
 
     const password_hash = await bcrypt.hash(newPassword, 12);
 
