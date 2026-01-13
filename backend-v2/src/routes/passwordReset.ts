@@ -29,11 +29,24 @@ function getMailer() {
 
   if (!host || !user || !pass) throw new Error("SMTP envs faltando");
 
+  const secure = port === 465; // 465 = SMTPS; 587 = STARTTLS
+
   return nodemailer.createTransport({
     host,
     port,
-    secure: port === 465,
+    secure,
     auth: { user, pass },
+
+    // ✅ Render/Gmail: evita timeout e força TLS quando é 587
+    requireTLS: !secure, // se não é 465, força STARTTLS
+    tls: {
+      rejectUnauthorized: false,
+    },
+
+    // ✅ timeouts para não travar em "Connection timeout"
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   });
 }
 
@@ -145,7 +158,8 @@ router.post("/auth/forgot-password", async (req, res) => {
     console.log("RESET redirectLink =", redirectLink);
 
     const transporter = getMailer();
-    const from = process.env.MAIL_FROM || process.env.SMTP_FROM || "Triade <no-reply@triade.com.br>";
+    const from =
+      process.env.MAIL_FROM || process.env.SMTP_FROM || "Triade <no-reply@triade.com.br>";
 
     // ✅ mandamos o link HTTP/HTTPS clicável (redirect)
     await transporter.sendMail({
@@ -213,7 +227,9 @@ router.post("/auth/reset-password", async (req, res) => {
 
     if (findErr || !authRow?.id) return res.status(400).json({ ok: false, error: "Token inválido" });
 
-    const expMs = authRow.reset_token_expires_at ? new Date(authRow.reset_token_expires_at).getTime() : 0;
+    const expMs = authRow.reset_token_expires_at
+      ? new Date(authRow.reset_token_expires_at).getTime()
+      : 0;
     if (!expMs || expMs < Date.now()) return res.status(400).json({ ok: false, error: "Token expirado" });
 
     const password_hash = await bcrypt.hash(newPassword, 12);
