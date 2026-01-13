@@ -1,0 +1,47 @@
+{
+    "compilerOptions": {
+        "target": "es2020",
+        "module": "commonjs",
+        "moduleResolution": "node10",
+        "rootDir": "./src",
+        "esModuleInterop": true,
+        "strict": true,
+        "types": [
+            "node"
+        ],
+        "skipLibCheck": true,
+        "allowSyntheticDefaultImports": true,
+        "noImplicitAny": true,
+        "noImplicitThis": true,
+        "strictNullChecks": true,
+        "strictFunctionTypes": true,
+        "strictBindCallApply": true,
+        "strictPropertyInitialization": true,
+        "strictBuiltinIteratorReturn": true,
+        "alwaysStrict": true,
+        "useUnknownInCatchVariables": true
+    },
+    "files": [
+        "./src/server.ts",
+        "./src/lib/supabase.ts",
+        "./src/routes/auth.ts",
+        "./src/routes/health.ts",
+        "./src/routes/me.ts",
+        "./src/routes/notifications.ts",
+        "./src/routes/operation-costs.ts",
+        "./src/routes/operation-financial.ts",
+        "./src/routes/operations.ts",
+        "./src/routes/passwordReset.ts",
+        "./src/routes/push-dispatch.ts",
+        "./src/routes/push.ts",
+        "./src/routes/sync/excel.ts",
+        "./src/routes/sync/omie.ts",
+        "./src/services/excel/readNotificationsExcel.ts",
+        "./src/services/excel/readOperationsExcel.ts",
+        "./src/services/omie/callOmie.ts",
+        "./src/services/omie/omieClient.ts"
+    ],
+    "include": [
+        "src"
+    ]
+}
