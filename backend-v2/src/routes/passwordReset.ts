@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import nodemailer from "nodemailer";
+import axios from "axios";
 import { supabaseAdmin } from "../lib/supabase";
 
 const router = Router();
@@ -10,26 +11,30 @@ const onlyDigits = (v: string) => (v || "").replace(/\D/g, "");
 const sha256Hex = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 
 function getDeepLink(token: string) {
-  const base = process.env.APP_RESET_BASE_URL; // exp://.../--/reset-password OR triade://reset-password
+  const base = process.env.APP_RESET_BASE_URL; // triade://reset-password (prod) OR exp://.../--/reset-password (dev)
   if (!base) throw new Error("APP_RESET_BASE_URL não configurado");
   return `${base}?token=${encodeURIComponent(token)}`;
 }
 
 function getPublicRedirectLink(token: string) {
-  const pub = process.env.PUBLIC_BACKEND_URL; // ex: http://11.0.3.3:4001
+  const pub = process.env.PUBLIC_BACKEND_URL; // ex: https://triade-backend.onrender.com
   if (!pub) throw new Error("PUBLIC_BACKEND_URL não configurado");
   return `${pub.replace(/\/$/, "")}/r/reset?token=${encodeURIComponent(token)}`;
 }
 
-function getMailer() {
+/* =========================
+   Email senders
+========================= */
+
+function getMailerSMTP() {
   const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || "465");
+  const port = Number(process.env.SMTP_PORT || "587");
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
   if (!host || !user || !pass) throw new Error("SMTP envs faltando");
 
-  const secure = port === 465; // 465 = SMTPS; 465 = STARTTLS
+  const secure = port === 465;
 
   return nodemailer.createTransport({
     host,
@@ -37,23 +42,72 @@ function getMailer() {
     secure,
     auth: { user, pass },
 
-    // ✅ Render/Gmail: evita timeout e força TLS quando é 465
-    requireTLS: !secure, // se não é 465, força STARTTLS
-    tls: {
-      rejectUnauthorized: false,
-    },
-
-    // ✅ timeouts para não travar em "Connection timeout"
+    // timeouts para não travar indefinidamente
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 10000,
+
+    // STARTTLS quando não for 465
+    requireTLS: !secure,
+    tls: { rejectUnauthorized: false },
   });
+}
+
+async function sendEmail(params: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}) {
+  // ✅ Preferência: RESEND (HTTPS) — funciona no Render
+  const resendKey = process.env.RESEND_API_KEY;
+  if (resendKey) {
+    const from =
+      process.env.RESEND_FROM ||
+      process.env.MAIL_FROM ||
+      process.env.SMTP_FROM ||
+      "Triade <onboarding@resend.dev>";
+
+    await axios.post(
+      "https://api.resend.com/emails",
+      {
+        from,
+        to: [params.to],
+        subject: params.subject,
+        text: params.text,
+        html: params.html,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${resendKey}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 15000,
+      }
+    );
+
+    return { provider: "resend" as const };
+  }
+
+  // 🔁 Fallback: SMTP (bom pro local/dev)
+  const transporter = getMailerSMTP();
+  const from =
+    process.env.MAIL_FROM || process.env.SMTP_FROM || "Triade <no-reply@triade.com.br>";
+
+  await transporter.sendMail({
+    from,
+    to: params.to,
+    subject: params.subject,
+    text: params.text,
+    html: params.html,
+  });
+
+  return { provider: "smtp" as const };
 }
 
 /* =========================
    Redirect clicável (HTTPS/HTTP)
    GET /r/reset?token=...
-   - abre uma página simples que redireciona para exp:// ou triade://
 ========================= */
 router.get("/r/reset", async (req, res) => {
   const token = String(req.query?.token || "");
@@ -66,8 +120,6 @@ router.get("/r/reset", async (req, res) => {
     return res.status(500).send("Configuração de deep link ausente.");
   }
 
-  // HTML com botão e tentativa automática de abrir o deep link
-  // + fallback copiável
   return res
     .status(200)
     .setHeader("Content-Type", "text/html; charset=utf-8")
@@ -94,7 +146,6 @@ router.get("/r/reset", async (req, res) => {
     <code>${deepLink}</code>
 
     <script>
-      // tenta abrir automático
       window.location.href = "${deepLink}";
     </script>
   </body>
@@ -157,45 +208,47 @@ router.post("/auth/forgot-password", async (req, res) => {
     console.log("RESET deepLink =", deepLink);
     console.log("RESET redirectLink =", redirectLink);
 
-    const transporter = getMailer();
-    const from =
-      process.env.MAIL_FROM || process.env.SMTP_FROM || "Triade <no-reply@triade.com.br>";
+    const subject = "Redefinição de senha - Triade";
 
-    // ✅ mandamos o link HTTP/HTTPS clicável (redirect)
-    await transporter.sendMail({
-      from,
+    const text =
+      `Você solicitou a redefinição de senha.\n\n` +
+      `Abra este link no celular:\n${redirectLink}\n\n` +
+      `Se precisar copiar o deep link:\n${deepLink}\n`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; line-height:1.5; color:#111;">
+        <h2 style="margin:0 0 12px;">Redefinição de senha</h2>
+        <p style="margin:0 0 12px;">Abra no celular:</p>
+
+        <p style="margin:0 0 16px;">
+          <a href="${redirectLink}"
+             style="display:inline-block; padding:12px 16px; background:#0E2A47; color:#fff; text-decoration:none; border-radius:10px;">
+            Abrir para redefinir
+          </a>
+        </p>
+
+        <p style="margin:0 0 8px; color:#444;">
+          Se preferir, copie e cole este link no navegador do celular:
+        </p>
+        <p style="margin:0 0 16px; word-break:break-all;">
+          <a href="${redirectLink}" style="color:#0E2A47; text-decoration:underline;">${redirectLink}</a>
+        </p>
+
+        <hr style="border:none; border-top:1px solid #eee; margin:16px 0;" />
+        <p style="margin:0; color:#666; font-size:12px;">
+          Se você não solicitou, ignore este e-mail.
+        </p>
+      </div>
+    `;
+
+    const sent = await sendEmail({
       to: party.email,
-      subject: "Redefinição de senha - Triade",
-      text:
-        `Você solicitou a redefinição de senha.\n\n` +
-        `Abra este link no celular:\n${redirectLink}\n\n` +
-        `Se precisar copiar o deep link:\n${deepLink}\n`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height:1.5; color:#111;">
-          <h2 style="margin:0 0 12px;">Redefinição de senha</h2>
-          <p style="margin:0 0 12px;">Abra no celular:</p>
-
-          <p style="margin:0 0 16px;">
-            <a href="${redirectLink}"
-               style="display:inline-block; padding:12px 16px; background:#0E2A47; color:#fff; text-decoration:none; border-radius:10px;">
-              Abrir para redefinir
-            </a>
-          </p>
-
-          <p style="margin:0 0 8px; color:#444;">
-            Se preferir, copie e cole este link no navegador do celular:
-          </p>
-          <p style="margin:0 0 16px; word-break:break-all;">
-            <a href="${redirectLink}" style="color:#0E2A47; text-decoration:underline;">${redirectLink}</a>
-          </p>
-
-          <hr style="border:none; border-top:1px solid #eee; margin:16px 0;" />
-          <p style="margin:0; color:#666; font-size:12px;">
-            Se você não solicitou, ignore este e-mail.
-          </p>
-        </div>
-      `,
+      subject,
+      text,
+      html,
     });
+
+    console.log("[forgot-password] email sent via:", sent.provider);
 
     return res.json(neutral);
   } catch (e: any) {
@@ -227,9 +280,7 @@ router.post("/auth/reset-password", async (req, res) => {
 
     if (findErr || !authRow?.id) return res.status(400).json({ ok: false, error: "Token inválido" });
 
-    const expMs = authRow.reset_token_expires_at
-      ? new Date(authRow.reset_token_expires_at).getTime()
-      : 0;
+    const expMs = authRow.reset_token_expires_at ? new Date(authRow.reset_token_expires_at).getTime() : 0;
     if (!expMs || expMs < Date.now()) return res.status(400).json({ ok: false, error: "Token expirado" });
 
     const password_hash = await bcrypt.hash(newPassword, 12);
