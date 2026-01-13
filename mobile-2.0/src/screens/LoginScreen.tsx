@@ -221,14 +221,8 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
 
               {errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
 
-              <TouchableOpacity
-                onPress={() =>
-                  Alert.alert(
-                    "Esqueci minha senha",
-                    "Para alterar a senha, procure o responsável."
-                  )
-                }
-              >
+              {/* ✅ ÚNICA MUDANÇA: em vez de Alert, navega pra tela ForgotPassword */}
+              <TouchableOpacity onPress={() => navigation.navigate("ForgotPassword")}>
                 <Text style={styles.forgotPassword}>Esqueci minha senha</Text>
               </TouchableOpacity>
 

@@ -16,7 +16,7 @@ function getDeepLink(token: string) {
 }
 
 function getPublicRedirectLink(token: string) {
-  const pub = process.env.PUBLIC_BACKEND_URL; // ex: http://192.168.1.126:4001
+  const pub = process.env.PUBLIC_BACKEND_URL; // ex: http://11.0.3.3:4001
   if (!pub) throw new Error("PUBLIC_BACKEND_URL não configurado");
   return `${pub.replace(/\/$/, "")}/r/reset?token=${encodeURIComponent(token)}`;
 }

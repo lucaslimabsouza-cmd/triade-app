@@ -4,6 +4,7 @@
     "slug": "mobile-2-0",
     "version": "1.0.0",
     "orientation": "portrait",
+    "scheme": "triade",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,

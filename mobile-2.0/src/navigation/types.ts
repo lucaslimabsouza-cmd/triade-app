@@ -6,9 +6,16 @@ export type RootStackParamList = {
 };
 
 export type AuthStackParamList = {
+  // ===== EXISTENTES (NÃO ALTERADOS) =====
   Login: undefined;
   ChangePassword: { token: string };
   QuickAccess: undefined;
+
+  // ===== NOVOS (RESET DE SENHA) =====
+  ForgotPassword: undefined;
+
+  // token vem via deep link (query string), então é opcional aqui
+  ResetPassword: { token?: string } | undefined;
 };
 
 export type AppStackParamList = {
@@ -59,6 +66,6 @@ export type AppStackParamList = {
 
   Notifications: undefined;
 
-  // ✅ NOVO
+  // ✅ NOVO (já existia no seu código)
   Statement: undefined;
 };
