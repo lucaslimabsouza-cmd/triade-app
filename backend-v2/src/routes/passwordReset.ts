@@ -23,13 +23,13 @@ function getPublicRedirectLink(token: string) {
 
 function getMailer() {
   const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || "587");
+  const port = Number(process.env.SMTP_PORT || "465");
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
   if (!host || !user || !pass) throw new Error("SMTP envs faltando");
 
-  const secure = port === 465; // 465 = SMTPS; 587 = STARTTLS
+  const secure = port === 465; // 465 = SMTPS; 465 = STARTTLS
 
   return nodemailer.createTransport({
     host,
@@ -37,7 +37,7 @@ function getMailer() {
     secure,
     auth: { user, pass },
 
-    // ✅ Render/Gmail: evita timeout e força TLS quando é 587
+    // ✅ Render/Gmail: evita timeout e força TLS quando é 465
     requireTLS: !secure, // se não é 465, força STARTTLS
     tls: {
       rejectUnauthorized: false,
