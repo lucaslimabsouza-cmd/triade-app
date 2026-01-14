@@ -33,9 +33,31 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.readNotificationsExcel = readNotificationsExcel;
 exports.readNotificationsFromExcel = readNotificationsFromExcel;
 const XLSX = __importStar(require("xlsx"));
+function getNotificationsSheetUrl() {
+    // prioridade: LOGIN_SHEET_URL (como você já tem no env)
+    const url = process.env.LOGIN_SHEET_URL || process.env.EXCEL_URL;
+    if (!url) {
+        throw new Error("LOGIN_SHEET_URL (ou EXCEL_URL) não configurado no .env");
+    }
+    return String(url).trim();
+}
+/**
+ * ✅ Função que o cron chama (sem parâmetro)
+ * Lê a URL do .env e baixa a planilha.
+ */
+async function readNotificationsExcel() {
+    const url = getNotificationsSheetUrl();
+    return readNotificationsFromExcel(url);
+}
+/**
+ * ✅ Mantém a função antiga (com parâmetro), para reuso/teste.
+ */
 async function readNotificationsFromExcel(excelUrl) {
+    if (!excelUrl)
+        throw new Error("excelUrl vazio/undefined");
     const resp = await fetch(excelUrl);
     if (!resp.ok) {
         throw new Error(`Falha ao baixar Excel (${resp.status})`);
@@ -45,7 +67,8 @@ async function readNotificationsFromExcel(excelUrl) {
     const wb = XLSX.read(buffer, { type: "buffer" });
     const sheet = wb.Sheets["Ultimas Notificações"];
     if (!sheet) {
-        throw new Error('Aba "Ultimas Notificações" não encontrada no Excel');
+        const available = wb.SheetNames?.join(", ") || "(nenhuma)";
+        throw new Error(`Aba "Ultimas Notificações" não encontrada. Abas disponíveis: ${available}`);
     }
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: null });
     return rows;

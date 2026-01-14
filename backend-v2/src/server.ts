@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
@@ -22,6 +23,7 @@ import notificationsRouter from "./routes/notifications";
 import pushRouter from "./routes/push";
 import pushDispatchRouter from "./routes/push-dispatch";
 import passwordResetRouter from "./routes/passwordReset";
+import cronRoutes from "./routes/cron";
 
 
 
@@ -63,6 +65,7 @@ app.use("/notifications", notificationsRouter);
 app.use("/push", pushRouter);
 app.use("/push", pushDispatchRouter);
 app.use(passwordResetRouter);
+app.use(cronRoutes);
 
 
 

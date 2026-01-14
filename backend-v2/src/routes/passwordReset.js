@@ -6,41 +6,119 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const crypto_1 = __importDefault(require("crypto"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const axios_1 = __importDefault(require("axios"));
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const supabase_1 = require("../lib/supabase");
 const router = (0, express_1.Router)();
+/* =========================
+   Utils
+========================= */
 const onlyDigits = (v) => (v || "").replace(/\D/g, "");
 const sha256Hex = (v) => crypto_1.default.createHash("sha256").update(v).digest("hex");
+function stripQuotes(v) {
+    return String(v ?? "").replace(/^"+|"+$/g, "").trim();
+}
+function sanitizeEmailFrom(v) {
+    // remove aspas, quebras de linha e espaços duplicados
+    const raw = String(v ?? "");
+    const cleaned = raw
+        .replace(/^"+|"+$/g, "")
+        .replace(/[\r\n]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    return { raw, cleaned };
+}
+function isValidFromFormat(from) {
+    // email@dominio.com
+    const plain = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+    // Nome <email@dominio.com>
+    const named = /^.+\s<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>$/;
+    return plain.test(from) || named.test(from);
+}
 function getDeepLink(token) {
-    const base = process.env.APP_RESET_BASE_URL; // exp://.../--/reset-password OR triade://reset-password
+    const base = stripQuotes(process.env.APP_RESET_BASE_URL); // triade://reset-password
     if (!base)
         throw new Error("APP_RESET_BASE_URL não configurado");
     return `${base}?token=${encodeURIComponent(token)}`;
 }
 function getPublicRedirectLink(token) {
-    const pub = process.env.PUBLIC_BACKEND_URL; // ex: http://11.0.3.3:4001
+    const pub = stripQuotes(process.env.PUBLIC_BACKEND_URL); // https://triade-backend.onrender.com
     if (!pub)
         throw new Error("PUBLIC_BACKEND_URL não configurado");
     return `${pub.replace(/\/$/, "")}/r/reset?token=${encodeURIComponent(token)}`;
 }
-function getMailer() {
-    const host = process.env.SMTP_HOST;
-    const port = Number(process.env.SMTP_PORT || "465");
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
+/* =========================
+   Mail: Resend (prod) + SMTP (fallback)
+========================= */
+function getMailerSMTP() {
+    const host = stripQuotes(process.env.SMTP_HOST);
+    const port = Number(stripQuotes(process.env.SMTP_PORT || "587"));
+    const user = stripQuotes(process.env.SMTP_USER);
+    const pass = stripQuotes(process.env.SMTP_PASS);
     if (!host || !user || !pass)
         throw new Error("SMTP envs faltando");
+    const secure = port === 465;
     return nodemailer_1.default.createTransport({
         host,
         port,
-        secure: port === 465,
+        secure,
         auth: { user, pass },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 10000,
+        requireTLS: !secure,
+        tls: { rejectUnauthorized: false },
     });
 }
+async function sendEmail(params) {
+    const resendKey = stripQuotes(process.env.RESEND_API_KEY);
+    // ✅ Preferência: Resend (HTTPS)
+    if (resendKey) {
+        const fromEnv = process.env.RESEND_FROM || "Triade <reset@espacopart.com.br>";
+        const { raw, cleaned } = sanitizeEmailFrom(fromEnv);
+        if (!isValidFromFormat(cleaned)) {
+            console.log("[resend] INVALID RESEND_FROM raw =", JSON.stringify(raw));
+            console.log("[resend] INVALID RESEND_FROM cleaned =", JSON.stringify(cleaned));
+            throw new Error("RESEND_FROM inválido no env");
+        }
+        try {
+            const resp = await axios_1.default.post("https://api.resend.com/emails", {
+                from: cleaned,
+                to: [params.to],
+                subject: params.subject,
+                text: params.text,
+                html: params.html,
+            }, {
+                headers: {
+                    Authorization: `Bearer ${resendKey}`,
+                    "Content-Type": "application/json",
+                },
+                timeout: 15000,
+            });
+            console.log("[resend] sent ok:", resp?.data);
+            return { provider: "resend" };
+        }
+        catch (e) {
+            console.log("[resend] error status:", e?.response?.status);
+            console.log("[resend] error data:", e?.response?.data || e?.message || e);
+            throw e;
+        }
+    }
+    // 🔁 Fallback: SMTP (local/dev)
+    const transporter = getMailerSMTP();
+    const fromSMTP = stripQuotes(process.env.MAIL_FROM) || stripQuotes(process.env.SMTP_FROM) || "Triade <no-reply@triade.com.br>";
+    await transporter.sendMail({
+        from: fromSMTP,
+        to: params.to,
+        subject: params.subject,
+        text: params.text,
+        html: params.html,
+    });
+    return { provider: "smtp" };
+}
 /* =========================
-   Redirect clicável (HTTPS/HTTP)
+   Redirect clicável
    GET /r/reset?token=...
-   - abre uma página simples que redireciona para exp:// ou triade://
 ========================= */
 router.get("/r/reset", async (req, res) => {
     const token = String(req.query?.token || "");
@@ -53,8 +131,6 @@ router.get("/r/reset", async (req, res) => {
     catch {
         return res.status(500).send("Configuração de deep link ausente.");
     }
-    // HTML com botão e tentativa automática de abrir o deep link
-    // + fallback copiável
     return res
         .status(200)
         .setHeader("Content-Type", "text/html; charset=utf-8")
@@ -81,7 +157,6 @@ router.get("/r/reset", async (req, res) => {
     <code>${deepLink}</code>
 
     <script>
-      // tenta abrir automático
       window.location.href = "${deepLink}";
     </script>
   </body>
@@ -107,7 +182,7 @@ router.post("/auth/forgot-password", async (req, res) => {
             .maybeSingle();
         if (partyErr || !party?.id || !party?.email)
             return res.json(neutral);
-        const ttlMin = Number(process.env.RESET_TOKEN_TTL_MINUTES || "30");
+        const ttlMin = Number(stripQuotes(process.env.RESET_TOKEN_TTL_MINUTES || "30"));
         const token = crypto_1.default.randomBytes(32).toString("hex");
         const tokenHash = sha256Hex(token);
         const expiresAt = new Date(Date.now() + ttlMin * 60 * 1000).toISOString();
@@ -116,6 +191,7 @@ router.post("/auth/forgot-password", async (req, res) => {
             reset_token_expires_at: expiresAt,
             reset_token_sent_at: new Date().toISOString(),
         };
+        // update -> se não existir, upsert
         const { error: updErr, data: updData } = await supabase_1.supabaseAdmin
             .from("party_auth")
             .update(updatePayload)
@@ -135,42 +211,42 @@ router.post("/auth/forgot-password", async (req, res) => {
         const redirectLink = getPublicRedirectLink(token);
         console.log("RESET deepLink =", deepLink);
         console.log("RESET redirectLink =", redirectLink);
-        const transporter = getMailer();
-        const from = process.env.MAIL_FROM || process.env.SMTP_FROM || "Triade <no-reply@triade.com.br>";
-        // ✅ mandamos o link HTTP/HTTPS clicável (redirect)
-        await transporter.sendMail({
-            from,
+        const subject = "Redefinição de senha - Triade";
+        const text = `Você solicitou a redefinição de senha.\n\n` +
+            `Abra este link no celular:\n${redirectLink}\n\n` +
+            `Se precisar copiar o deep link:\n${deepLink}\n`;
+        const html = `
+      <div style="font-family: Arial, sans-serif; line-height:1.5; color:#111;">
+        <h2 style="margin:0 0 12px;">Redefinição de senha</h2>
+        <p style="margin:0 0 12px;">Abra no celular:</p>
+
+        <p style="margin:0 0 16px;">
+          <a href="${redirectLink}"
+             style="display:inline-block; padding:12px 16px; background:#0E2A47; color:#fff; text-decoration:none; border-radius:10px;">
+            Abrir para redefinir
+          </a>
+        </p>
+
+        <p style="margin:0 0 8px; color:#444;">
+          Se preferir, copie e cole este link no navegador do celular:
+        </p>
+        <p style="margin:0 0 16px; word-break:break-all;">
+          <a href="${redirectLink}" style="color:#0E2A47; text-decoration:underline;">${redirectLink}</a>
+        </p>
+
+        <hr style="border:none; border-top:1px solid #eee; margin:16px 0;" />
+        <p style="margin:0; color:#666; font-size:12px;">
+          Se você não solicitou, ignore este e-mail.
+        </p>
+      </div>
+    `;
+        const sent = await sendEmail({
             to: party.email,
-            subject: "Redefinição de senha - Triade",
-            text: `Você solicitou a redefinição de senha.\n\n` +
-                `Abra este link no celular:\n${redirectLink}\n\n` +
-                `Se precisar copiar o deep link:\n${deepLink}\n`,
-            html: `
-        <div style="font-family: Arial, sans-serif; line-height:1.5; color:#111;">
-          <h2 style="margin:0 0 12px;">Redefinição de senha</h2>
-          <p style="margin:0 0 12px;">Abra no celular:</p>
-
-          <p style="margin:0 0 16px;">
-            <a href="${redirectLink}"
-               style="display:inline-block; padding:12px 16px; background:#0E2A47; color:#fff; text-decoration:none; border-radius:10px;">
-              Abrir para redefinir
-            </a>
-          </p>
-
-          <p style="margin:0 0 8px; color:#444;">
-            Se preferir, copie e cole este link no navegador do celular:
-          </p>
-          <p style="margin:0 0 16px; word-break:break-all;">
-            <a href="${redirectLink}" style="color:#0E2A47; text-decoration:underline;">${redirectLink}</a>
-          </p>
-
-          <hr style="border:none; border-top:1px solid #eee; margin:16px 0;" />
-          <p style="margin:0; color:#666; font-size:12px;">
-            Se você não solicitou, ignore este e-mail.
-          </p>
-        </div>
-      `,
+            subject,
+            text,
+            html,
         });
+        console.log("[forgot-password] email sent via:", sent.provider);
         return res.json(neutral);
     }
     catch (e) {

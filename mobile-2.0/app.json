@@ -4,10 +4,10 @@
     "slug": "mobile-2-0",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "triade",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "scheme": "triade",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -33,9 +33,6 @@
         "projectId": "f6f37165-bd39-4116-bb6b-b2f00f2f3e12"
       }
     },
-    "plugins": [
-      "expo-router",
-      "expo-secure-store"
-    ]
+    "plugins": ["expo-router", "expo-secure-store"]
   }
 }

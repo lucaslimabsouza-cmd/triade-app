@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 require("dotenv/config");
@@ -22,6 +23,7 @@ const notifications_1 = __importDefault(require("./routes/notifications"));
 const push_1 = __importDefault(require("./routes/push"));
 const push_dispatch_1 = __importDefault(require("./routes/push-dispatch"));
 const passwordReset_1 = __importDefault(require("./routes/passwordReset"));
+const cron_1 = __importDefault(require("./routes/cron"));
 const app = (0, express_1.default)();
 /* =========================
    Middlewares
@@ -51,6 +53,7 @@ app.use("/notifications", notifications_1.default);
 app.use("/push", push_1.default);
 app.use("/push", push_dispatch_1.default);
 app.use(passwordReset_1.default);
+app.use(cron_1.default);
 app.use("/operation-costs", operation_costs_1.default);
 console.log("✅ route mounted: /operation-costs");
 /* =========================
