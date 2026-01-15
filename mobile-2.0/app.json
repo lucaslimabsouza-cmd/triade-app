@@ -14,7 +14,11 @@
       "backgroundColor": "#0E2A47"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.lucassouza1.mobile20",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -33,6 +37,9 @@
         "projectId": "f6f37165-bd39-4116-bb6b-b2f00f2f3e12"
       }
     },
-    "plugins": ["expo-router", "expo-secure-store"]
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ]
   }
 }
