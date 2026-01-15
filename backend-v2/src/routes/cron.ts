@@ -1,7 +1,5 @@
 import { Router } from "express";
 import { supabaseAdmin } from "../lib/supabase";
-import { Expo } from "expo-server-sdk";
-
 import * as NotificationsExcel from "../services/excel/readNotificationsExcel";
 
 const router = Router();
@@ -18,82 +16,51 @@ function pickFn(mod: any, preferredName: string) {
   if (typeof mod?.[preferredName] === "function") return mod[preferredName];
   if (typeof mod?.default === "function") return mod.default;
   for (const k of Object.keys(mod || {})) {
-    if (typeof mod[k] === "function") return mod[k];
+    if (typeof (mod as any)[k] === "function") return (mod as any)[k];
   }
   return null;
 }
 
+function s(v: any) {
+  return String(v ?? "").trim();
+}
+
 function normalizeSim(v: any) {
-  return String(v ?? "").trim().toLowerCase() === "sim";
+  return s(v).toLowerCase() === "sim";
 }
 
 function mustHaveSheetUrl() {
-  // ✅ aceita os dois nomes, mas prioriza LOGIN_SHEET_URL
   const url = process.env.LOGIN_SHEET_URL || process.env.EXCEL_URL;
-  if (!url) {
-    throw new Error("LOGIN_SHEET_URL (ou EXCEL_URL) não configurado no env");
-  }
+  if (!url) throw new Error("LOGIN_SHEET_URL (ou EXCEL_URL) não configurado no env");
   return url;
 }
 
-async function sendPushToCpfs(cpfs: string[], title: string, body: string) {
-  // ⚠️ depende da existência da tabela push_tokens
-  const { data, error } = await supabaseAdmin
-    .from("push_tokens")
-    .select("cpf, expo_push_token")
-    .in("cpf", cpfs);
+function excelDateToISO(v: any): string | null {
+  if (v === null || v === undefined || v === "") return null;
 
-  if (error) throw error;
-
-  const expo = new Expo();
-
-  const messages = (data || [])
-    .map((row: any) => row.expo_push_token)
-    .filter((t: string) => Expo.isExpoPushToken(t))
-    .map((token: string) => ({
-      to: token,
-      title,
-      body,
-      sound: "default" as const,
-    }));
-
-  if (!messages.length) return { ok: true, sent: 0 };
-
-  const chunks = expo.chunkPushNotifications(messages);
-  let sent = 0;
-
-  for (const chunk of chunks) {
-    const tickets = await expo.sendPushNotificationsAsync(chunk);
-    sent += tickets.length;
+  if (typeof v === "number" && isFinite(v)) {
+    const ms = (v - 25569) * 86400 * 1000;
+    const dt = new Date(ms);
+    return isNaN(dt.getTime()) ? null : dt.toISOString();
   }
 
-  return { ok: true, sent };
+  const t = s(v);
+  if (!t) return null;
+
+  const dt = new Date(t);
+  if (!isNaN(dt.getTime())) return dt.toISOString();
+
+  return t;
 }
 
-async function resolveCpfsForNotification(codigoImovel: string | null) {
-  // ⚠️ depende da existência da tabela operation_investors (ou equivalente)
-  if (!codigoImovel) {
-    const { data, error } = await supabaseAdmin.from("push_tokens").select("cpf");
-    if (error) throw error;
-    return (data || []).map((r: any) => r.cpf);
-  }
-
-  const { data, error } = await supabaseAdmin
-    .from("operation_investors")
-    .select("cpf")
-    .eq("operation_name", codigoImovel);
-
-  if (error) throw error;
-
-  return (data || []).map((r: any) => r.cpf);
-}
-
-/* =========================================
-   POST /cron/sync-notifications
-========================================= */
-router.post("/cron/sync-notifications", requireAdmin, async (req, res) => {
+/**
+ * POST /cron/sync-notifications
+ * - Lê planilha
+ * - UPSERT em notifications por source_id
+ * - NÃO envia push aqui
+ */
+router.post("/cron/sync-notifications", requireAdmin, async (_req, res) => {
   try {
-    // ✅ valida env antes de tudo (evita o erro “parse URL undefined”)
     mustHaveSheetUrl();
 
     const readNotificationsExcel = pickFn(NotificationsExcel, "readNotificationsExcel");
@@ -103,61 +70,48 @@ router.post("/cron/sync-notifications", requireAdmin, async (req, res) => {
     if (typeof readNotificationsExcel !== "function") {
       return res.status(500).json({
         ok: false,
-        error: "Não achei função de leitura da planilha. Verifique exports em src/services/excel/readNotificationsExcel.ts",
+        error: "Não achei função de leitura da planilha (readNotificationsExcel).",
         exports: Object.keys(NotificationsExcel || {}),
       });
     }
 
-    const items = await readNotificationsExcel();
+    const items = (await readNotificationsExcel()) as any[];
 
-    let inserted = 0;
-    let pushQueued = 0;
-    let pushSent = 0;
+    let rows = 0;
+    let upserted = 0;
+    let skippedNoId = 0;
 
-    for (let i = 0; i < ((items as any[]) || []).length; i++) {
-      const n: any = (items as any[])[i];
+    for (const n of items || []) {
+      rows++;
 
-      // ✅ aceitando vários nomes possíveis vindos do Excel
-      const datahora = n.DataHora || n.datahora || n.datetime || null;
-      const codigoImovelRaw = n.CodigoImovel ?? n.codigo_imovel ?? n.codigoImovel ?? "";
-      const codigo_imovel = String(codigoImovelRaw || "").trim() || null;
+      const source_id = s(n.ID ?? n.Id ?? n.id);
+      if (!source_id) {
+        skippedNoId++;
+        continue;
+      }
 
-      const mensagem_curta = String(n.MensagemCurta ?? n.mensagem_curta ?? n.mensagemCurta ?? "").trim();
-      const mensagem_detalhada = String(n.MensagemDetalhada ?? n.mensagem_detalhada ?? n.mensagemDetalhada ?? "").trim();
-
-      const tipo = (n.Tipo ?? n.tipo ?? null) ? String(n.Tipo ?? n.tipo).trim() : null;
-      const enviar_push = normalizeSim(n.EnviarPush ?? n.enviar_push ?? n.enviarPush);
-
-      // ✅ grava na sua tabela notifications com os nomes CERTOS
       const payload = {
-        source_id: String(n.SourceId ?? n.source_id ?? i + 1),
-        datahora,
-        codigo_imovel,
-        mensagem_curta,
-        mensagem_detalhada,
-        tipo,
-        enviar_push,
+        source_id,
+        datahora: excelDateToISO(n.DataHora ?? n.datahora ?? null),
+        codigo_imovel: s(n.CodigoImovel ?? n.codigo_imovel ?? n.codigoImovel ?? "") || null,
+        mensagem_curta: s(n.MensagemCurta ?? n.mensagem_curta ?? n.mensagemCurta ?? ""),
+        mensagem_detalhada: s(n.MensagemDetalhada ?? n.mensagem_detalhada ?? n.mensagemDetalhada ?? ""),
+        tipo: s(n.Tipo ?? n.tipo ?? "") || null,
+        enviar_push: normalizeSim(n.EnviarPush ?? n.enviar_push ?? n.enviarPush),
       };
 
-      const { error } = await supabaseAdmin.from("notifications").insert(payload);
-      if (!error) inserted++;
+      const { error } = await supabaseAdmin
+        .from("notifications")
+        .upsert(payload, { onConflict: "source_id" });
 
-      // ✅ push opcional (se as tabelas existirem)
-      if (enviar_push && mensagem_curta) {
-        try {
-          pushQueued++;
-          const cpfs = await resolveCpfsForNotification(codigo_imovel);
-          if (cpfs.length) {
-            const out = await sendPushToCpfs(cpfs, "Triade", mensagem_curta);
-            pushSent += out.sent;
-          }
-        } catch (e: any) {
-          console.log("[cron] push skipped/error:", e?.message || e);
-        }
+      if (error) {
+        console.log("[cron] upsert error:", error.message);
+      } else {
+        upserted++;
       }
     }
 
-    return res.json({ ok: true, inserted, pushQueued, pushSent });
+    return res.json({ ok: true, rows, upserted, skippedNoId });
   } catch (e: any) {
     console.log("[cron/sync-notifications] error:", e?.message || e);
     return res.status(500).json({ ok: false, error: e?.message || "Erro interno" });
