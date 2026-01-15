@@ -32,13 +32,11 @@
       "favicon": "./assets/favicon.png"
     },
     "extra": {
-      "router": {},
       "eas": {
         "projectId": "f6f37165-bd39-4116-bb6b-b2f00f2f3e12"
       }
     },
     "plugins": [
-      "expo-router",
       "expo-secure-store"
     ]
   }
