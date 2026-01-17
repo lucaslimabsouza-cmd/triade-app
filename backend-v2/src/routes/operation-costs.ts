@@ -9,6 +9,7 @@ const router = Router();
 type JwtPayload = {
   party_id?: string;
   cpf_cnpj?: string;
+  is_admin?: boolean;
 };
 
 function requireAuth(req: any, res: any, next: any) {
@@ -26,6 +27,7 @@ function requireAuth(req: any, res: any, next: any) {
     req.user = {
       cpf_cnpj: decoded?.cpf_cnpj,
       party_id: decoded?.party_id,
+      is_admin: !!decoded?.is_admin,
     };
 
     return next();
@@ -249,6 +251,8 @@ router.get("/:operationId/debug-category", requireAuth, async (req: any, res) =>
  * - exclui categorias 2.10.98 e 2.10.99
  * - categoria: cod_categoria -> omie_categories.omie_code -> name
  * - fornecedor: cod_cliente -> omie_parties.omie_code -> name
+ *
+ * ✅ Admin: NÃO FILTRA nada por party (mesmo comportamento do normal, pois aqui já não existe filtro por party)
  */
 router.get("/:operationId", requireAuth, async (req: any, res) => {
   const operationId = cleanStr(req.params?.operationId);

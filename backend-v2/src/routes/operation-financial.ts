@@ -112,11 +112,29 @@ async function sumMovements(params: {
 }
 
 /**
+ * ✅ Soma movimentos do projeto SEM filtro por cod_cliente (ADMIN)
+ */
+async function sumMovementsAdmin(params: { projectInternalCode: string; categoryCode: string }) {
+  const { projectInternalCode, categoryCode } = params;
+
+  const { data, error } = await supabaseAdmin
+    .from("omie_mf_movements")
+    .select("valor")
+    .eq("cod_projeto", projectInternalCode)
+    .eq("cod_categoria", categoryCode);
+
+  if (error) throw new Error(`Supabase omie_mf_movements admin error: ${error.message}`);
+
+  const total = (data ?? []).reduce((acc: number, row: any) => acc + Number(row?.valor ?? 0), 0);
+  return { total, rows: data?.length ?? 0 };
+}
+
+/**
  * ✅ data do movimento (prioriza dt_pagamento, como você falou)
  */
 function getMovementDateRaw(row: any): string | null {
   const candidates = [
-    row?.dt_pagamento,      // ✅ PRINCIPAL (AAAA-MM-DD)
+    row?.dt_pagamento, // ✅ PRINCIPAL (AAAA-MM-DD)
     row?.data_pagamento,
     row?.data,
     row?.data_lancamento,
@@ -145,37 +163,8 @@ function toDateForCompare(raw: string | null): Date | null {
 }
 
 /**
- * ✅ SINAL PADRÃO (empresa): "1." entrada (+), "2." saída (-)
- * (Usado no /operation-financial e outros cálculos)
- */
-function classifySignedAmountCompany(valor: number, codCategoria?: string | null) {
-  const cat = String(codCategoria ?? "").trim();
-  if (cat.startsWith("2.")) return -Math.abs(valor);
-  if (cat.startsWith("1.")) return Math.abs(valor);
-  return valor;
-}
-
-/**
- * ✅ SINAL PARA O EXTRATO DO INVESTIDOR (invertido):
- * - Do ponto de vista do investidor:
- *   - Aporte (1.04.02) = SAÍDA (negativo)
- *   - Distribuição/retorno (2.10.98 / 2.10.99 etc) = ENTRADA (positivo)
- *
- * Regra prática:
- * - "1." vira NEGATIVO
- * - "2." vira POSITIVO
- */
-function classifySignedAmountInvestor(valor: number, codCategoria?: string | null) {
-  const cat = String(codCategoria ?? "").trim();
-  if (cat.startsWith("1.")) return -Math.abs(valor);
-  if (cat.startsWith("2.")) return Math.abs(valor);
-  return valor;
-}
-
-/**
  * =========================
  *  GET /operation-financial/:operationId
- *  (mantém como está)
  * =========================
  */
 router.get("/operation-financial/:operationId", requireAuth, async (req: Request, res: Response) => {
@@ -185,22 +174,10 @@ router.get("/operation-financial/:operationId", requireAuth, async (req: Request
       return res.status(400).json({ ok: false, error: "INVALID_OPERATION_ID", operationId });
     }
 
-    const cpfDigits = onlyDigits(String((req as any)?.user?.cpf_cnpj ?? ""));
-    if (!cpfDigits) {
-      return res.status(400).json({ ok: false, error: "MISSING_CPF_IN_TOKEN" });
-    }
+    const isAdmin = !!(req as any)?.user?.is_admin;
 
     const roiExpectedRaw = Number(req.query.roi_expected ?? 0);
     const roiExpectedPercent = roiExpectedRaw < 1 ? roiExpectedRaw * 100 : roiExpectedRaw;
-
-    const omieCodes = await getOmieCodesByCpf(cpfDigits);
-    if (omieCodes.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "OMIE_PARTY_NOT_FOUND_FOR_CPF",
-        cpfDigits,
-      });
-    }
 
     const { data: op, error: opErr } = await supabaseAdmin
       .from("operations")
@@ -273,6 +250,61 @@ router.get("/operation-financial/:operationId", requireAuth, async (req: Request
       return res.status(500).json({ ok: false, error: "OMIE_PROJECT_INTERNAL_CODE_EMPTY", best });
     }
 
+    // ✅ ADMIN: soma sem filtro por cod_cliente
+    if (isAdmin) {
+      const invested = await sumMovementsAdmin({
+        projectInternalCode,
+        categoryCode: "1.04.02",
+      });
+
+      const realized = await sumMovementsAdmin({
+        projectInternalCode,
+        categoryCode: "2.10.98",
+      });
+
+      const amountInvested = invested.total;
+      const realizedProfit = realized.total;
+
+      const expectedProfit =
+        amountInvested && roiExpectedPercent ? amountInvested * (roiExpectedPercent / 100) : 0;
+
+      const realizedRoiPercent = amountInvested > 0 ? (realizedProfit / amountInvested) * 100 : 0;
+
+      return res.json({
+        ok: true,
+        operationId,
+        operationName,
+        projectInternalCode,
+        amountInvested,
+        expectedProfit,
+        realizedProfit,
+        realizedRoiPercent,
+        roiExpectedPercent,
+        debug: {
+          isAdmin: true,
+          investedRowsMatched: invested.rows,
+          realizedRowsMatched: realized.rows,
+          matchedProjectName: best?.name,
+          matchMode,
+        },
+      });
+    }
+
+    // ✅ NORMAL: precisa do cpf do token
+    const cpfDigits = onlyDigits(String((req as any)?.user?.cpf_cnpj ?? ""));
+    if (!cpfDigits) {
+      return res.status(400).json({ ok: false, error: "MISSING_CPF_IN_TOKEN" });
+    }
+
+    const omieCodes = await getOmieCodesByCpf(cpfDigits);
+    if (omieCodes.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "OMIE_PARTY_NOT_FOUND_FOR_CPF",
+        cpfDigits,
+      });
+    }
+
     const invested = await sumMovements({
       projectInternalCode,
       categoryCode: "1.04.02",
@@ -304,6 +336,7 @@ router.get("/operation-financial/:operationId", requireAuth, async (req: Request
       realizedRoiPercent,
       roiExpectedPercent,
       debug: {
+        isAdmin: false,
         cpfDigits,
         omieCodes,
         investedRowsMatched: invested.rows,
@@ -324,29 +357,15 @@ router.get("/operation-financial/:operationId", requireAuth, async (req: Request
 
 /**
  * =========================
- *  ✅ Extrato (linhas) do CPF logado (VISÃO INVESTIDOR)
- *
+ *  ✅ Extrato (linhas)
  *  GET /financial/statement?mode=30|90|custom&start=YYYY-MM-DD&end=YYYY-MM-DD
  * =========================
  */
 async function handleFinancialStatement(req: Request, res: Response) {
   try {
-    const cpfDigits = onlyDigits(String((req as any)?.user?.cpf_cnpj ?? ""));
-    if (!cpfDigits) {
-      return res.status(400).json({ ok: false, error: "MISSING_CPF_IN_TOKEN" });
-    }
+    const isAdmin = !!(req as any)?.user?.is_admin;
 
-    const omieCodes = await getOmieCodesByCpf(cpfDigits);
-    if (omieCodes.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "OMIE_PARTY_NOT_FOUND_FOR_CPF",
-        cpfDigits,
-      });
-    }
-
-    const mode = String(req.query.mode ?? "30").trim(); // "30" | "90" | "custom"
-
+    const mode = String(req.query.mode ?? "30").trim();
     const now = new Date();
     const endD = parseISODateOnly(String(req.query.end ?? "")) ?? now;
 
@@ -362,9 +381,136 @@ async function handleFinancialStatement(req: Request, res: Response) {
     const startIso = toISODateOnly(startD);
     const endIso = toISODateOnly(endD);
 
-    /**
-     * 1) Projetos do investidor (onde ele aportou)
-     */
+    const startCmp = new Date(`${startIso}T00:00:00.000Z`).getTime();
+    const endCmp = new Date(`${endIso}T23:59:59.999Z`).getTime();
+
+    // ✅ ADMIN: extrato global (sem filtro por investidor)
+    if (isAdmin) {
+      const { data: rows, error: movErr } = await supabaseAdmin
+        .from("omie_mf_movements")
+        .select("cod_projeto,cod_categoria,cod_cliente,valor,descricao,dt_pagamento")
+        .limit(5000);
+
+      if (movErr) throw new Error(`Supabase omie_mf_movements statement admin error: ${movErr.message}`);
+
+      // nomes projetos (best effort)
+      const codes = Array.from(
+        new Set((rows ?? []).map((r: any) => String(r?.cod_projeto ?? "").trim()).filter(Boolean))
+      ).slice(0, 500);
+
+      const { data: projRows } = await supabaseAdmin
+        .from("omie_projects")
+        .select("omie_internal_code,name")
+        .in("omie_internal_code", codes);
+
+      const projectNameByCode = new Map<string, string>();
+      (projRows ?? []).forEach((p: any) => {
+        const code = String(p?.omie_internal_code ?? "").trim();
+        const name = String(p?.name ?? "").trim();
+        if (code) projectNameByCode.set(code, name);
+      });
+
+      const itemsRaw = (rows ?? [])
+        .map((r: any) => {
+          const projectCode = String(r?.cod_projeto ?? "").trim();
+          const projectName = projectNameByCode.get(projectCode) ?? projectCode;
+
+          const dateRaw = getMovementDateRaw(r);
+          const dateObj = toDateForCompare(dateRaw);
+
+          const dateOk = dateObj
+            ? dateObj.getTime() >= startCmp && dateObj.getTime() <= endCmp
+            : false;
+
+          const valor = coerceNumber(r?.valor);
+          const codCategoria = String(r?.cod_categoria ?? "").trim() || null;
+
+          // admin = visão "investidor" não faz muito sentido global, então:
+          // deixa padrão investidor para manter UI: 1. vira saída, 2. vira entrada.
+          const signed =
+            String(codCategoria ?? "").startsWith("1.")
+              ? -Math.abs(valor)
+              : String(codCategoria ?? "").startsWith("2.")
+              ? Math.abs(valor)
+              : valor;
+
+          const type = signed < 0 ? "saida" : "entrada";
+
+          const desc =
+            String(r?.descricao ?? "").trim() ||
+            projectName ||
+            "Movimentação";
+
+          return {
+            dateObj,
+            dateRaw,
+            dateOk,
+            projectCode,
+            projectName,
+            description: desc,
+            amount: signed,
+            type,
+          };
+        })
+        .filter((x: any) => x.dateOk);
+
+      itemsRaw.sort((a: any, b: any) => {
+        const ta = a.dateObj ? a.dateObj.getTime() : 0;
+        const tb = b.dateObj ? b.dateObj.getTime() : 0;
+        return tb - ta;
+      });
+
+      let totalIn = 0;
+      let totalOut = 0;
+
+      const items = itemsRaw.map((x: any, idx: number) => {
+        if (x.amount < 0) totalOut += Math.abs(x.amount);
+        else totalIn += x.amount;
+
+        return {
+          id: `${x.projectCode}:${idx}:${x.dateRaw ?? "nodate"}`,
+          date: x.dateObj ? toISODateOnly(x.dateObj) : null,
+          dateTimeRaw: x.dateRaw,
+          description: x.description,
+          amount: x.amount,
+          type: x.type,
+          projectInternalCode: x.projectCode,
+          projectName: x.projectName,
+        };
+      });
+
+      const net = totalIn - totalOut;
+
+      return res.json({
+        ok: true,
+        start: startIso,
+        end: endIso,
+        items,
+        totals: { in: totalIn, out: totalOut, net },
+        debug: {
+          isAdmin: true,
+          rowsFetched: (rows ?? []).length,
+          itemsReturned: items.length,
+        },
+      });
+    }
+
+    // ✅ NORMAL
+    const cpfDigits = onlyDigits(String((req as any)?.user?.cpf_cnpj ?? ""));
+    if (!cpfDigits) {
+      return res.status(400).json({ ok: false, error: "MISSING_CPF_IN_TOKEN" });
+    }
+
+    const omieCodes = await getOmieCodesByCpf(cpfDigits);
+    if (omieCodes.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        error: "OMIE_PARTY_NOT_FOUND_FOR_CPF",
+        cpfDigits,
+      });
+    }
+
+    // 1) Projetos do investidor (onde ele aportou)
     const { data: investedRows, error: invErr } = await supabaseAdmin
       .from("omie_mf_movements")
       .select("cod_projeto")
@@ -392,10 +538,7 @@ async function handleFinancialStatement(req: Request, res: Response) {
       });
     }
 
-    /**
-     * 2) Busca movimentos (sem depender de filtro de data no SQL)
-     *    - usa dt_pagamento como data principal
-     */
+    // 2) Busca movimentos
     const { data: rows, error: movErr } = await supabaseAdmin
       .from("omie_mf_movements")
       .select("cod_projeto,cod_categoria,cod_cliente,valor,descricao,dt_pagamento")
@@ -405,9 +548,7 @@ async function handleFinancialStatement(req: Request, res: Response) {
 
     if (movErr) throw new Error(`Supabase omie_mf_movements statement error: ${movErr.message}`);
 
-    /**
-     * 3) Nomes dos projetos
-     */
+    // 3) Nomes dos projetos
     const { data: projRows, error: projErr } = await supabaseAdmin
       .from("omie_projects")
       .select("omie_internal_code,name")
@@ -422,16 +563,12 @@ async function handleFinancialStatement(req: Request, res: Response) {
       if (code) projectNameByCode.set(code, name);
     });
 
-    // filtro de período
-    const startCmp = new Date(`${startIso}T00:00:00.000Z`).getTime();
-    const endCmp = new Date(`${endIso}T23:59:59.999Z`).getTime();
-
     const itemsRaw = (rows ?? [])
       .map((r: any) => {
         const projectCode = String(r?.cod_projeto ?? "").trim();
         const projectName = projectNameByCode.get(projectCode) ?? projectCode;
 
-        const dateRaw = getMovementDateRaw(r); // dt_pagamento
+        const dateRaw = getMovementDateRaw(r);
         const dateObj = toDateForCompare(dateRaw);
 
         const dateOk = dateObj
@@ -441,16 +578,17 @@ async function handleFinancialStatement(req: Request, res: Response) {
         const valor = coerceNumber(r?.valor);
         const codCategoria = String(r?.cod_categoria ?? "").trim() || null;
 
-        // ✅ IMPORTANTe: visão investidor (invertido)
-        const signedAmount = classifySignedAmountInvestor(valor, codCategoria);
+        // visão investidor (invertido)
+        const signedAmount =
+          String(codCategoria ?? "").startsWith("1.")
+            ? -Math.abs(valor)
+            : String(codCategoria ?? "").startsWith("2.")
+            ? Math.abs(valor)
+            : valor;
 
         const type = signedAmount < 0 ? "saida" : "entrada";
 
-        // ✅ descrição simples (sem categoria)
-        const desc =
-          String(r?.descricao ?? "").trim() ||
-          projectName ||
-          "Movimentação";
+        const desc = String(r?.descricao ?? "").trim() || projectName || "Movimentação";
 
         return {
           dateObj,
@@ -465,14 +603,12 @@ async function handleFinancialStatement(req: Request, res: Response) {
       })
       .filter((x: any) => x.dateOk);
 
-    // ordena desc (mais recente primeiro)
     itemsRaw.sort((a: any, b: any) => {
       const ta = a.dateObj ? a.dateObj.getTime() : 0;
       const tb = b.dateObj ? b.dateObj.getTime() : 0;
       return tb - ta;
     });
 
-    // totals
     let totalIn = 0;
     let totalOut = 0;
 
