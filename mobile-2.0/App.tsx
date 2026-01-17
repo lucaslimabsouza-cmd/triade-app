@@ -4,6 +4,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import RootNavigator from "./src/navigation/RootNavigator";
 import * as Notifications from "expo-notifications";
 
+// 🔔 Configuração padrão de notificações
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -12,13 +13,17 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// 🔗 CONFIGURAÇÃO DE DEEP LINK (CORRETA)
 const linking = {
   prefixes: ["triade://"],
   config: {
     screens: {
       Auth: {
         screens: {
-          ChangePassword: "reset-password",
+          // ✅ AQUI É O PONTO-CHAVE:
+          // triade://reset-password?token=XYZ
+          // abre a tela ResetPassword
+          ResetPassword: "reset-password",
         },
       },
     },
