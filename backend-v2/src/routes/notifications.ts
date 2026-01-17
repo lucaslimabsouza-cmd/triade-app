@@ -1,5 +1,5 @@
 // src/routes/notifications.ts
-import { Router, Request, Response } from "express";
+import { Router } from "express";
 import { requireAuth } from "./auth";
 import { supabaseAdmin } from "../lib/supabase";
 
@@ -12,92 +12,83 @@ function uniq(arr: string[]) {
 function s(v: any) {
   return String(v ?? "").trim();
 }
-function safeStrOrNull(v: any): string | null {
-  const x = s(v);
-  return x ? x : null;
-}
-
-async function getCodProjetosByParty(party: { cpf_cnpj?: any; omie_code?: any }) {
-  const cpfCnpj = s(party.cpf_cnpj);
-  const omieCode = s(party.omie_code);
-
-  if (omieCode) {
-    const { data, error } = await supabaseAdmin
-      .from("omie_mf_movements")
-      .select("cod_projeto")
-      .eq("cod_cliente", omieCode);
-
-    if (error) throw new Error(error.message);
-
-    return uniq((data ?? []).map((r: any) => s(r?.cod_projeto)).filter(Boolean));
-  }
-
-  if (cpfCnpj) {
-    const { data } = await supabaseAdmin
-      .from("omie_mf_movements")
-      .select("cod_projeto")
-      .or(`cpf.eq.${cpfCnpj},cpf_cnpj.eq.${cpfCnpj}`);
-
-    return uniq((data ?? []).map((r: any) => s(r?.cod_projeto)).filter(Boolean));
-  }
-
-  return [];
-}
-
-async function getProjectNamesByCodProjetos(codProjetos: string[]) {
-  if (!codProjetos.length) return [];
-
-  const { data, error } = await supabaseAdmin
-    .from("omie_projects")
-    .select("name")
-    .in("omie_internal_code", codProjetos);
-
-  if (error) throw new Error(error.message);
-
-  return uniq((data ?? []).map((p: any) => s(p?.name)).filter(Boolean));
-}
-
-async function fetchNotificationsForParty(party: any) {
-  const codProjetos = await getCodProjetosByParty(party);
-  const projectNames = await getProjectNamesByCodProjetos(codProjetos);
-
-  let query = supabaseAdmin
-    .from("notifications")
-    .select("*")
-    .order("datahora", { ascending: false })
-    .limit(200);
-
-  if (projectNames.length > 0) {
-    const inList = projectNames.map((n) => `"${n}"`).join(",");
-    query = query.or(`codigo_imovel.is.null,codigo_imovel.in.(${inList})`);
-  } else {
-    query = query.is("codigo_imovel", null);
-  }
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-
-  return data ?? [];
-}
 
 /**
  * GET /notifications
+ * - Admin: retorna TODAS as notificações
+ * - Usuário normal: filtra por projetos
  */
 router.get("/", requireAuth, async (req, res) => {
   try {
-    const partyId = s((req as any).user?.party_id);
+    const user = (req as any).user;
+
+    // ✅ ADMIN: tudo
+    if (user?.is_admin) {
+      const { data, error } = await supabaseAdmin
+        .from("notifications")
+        .select("*")
+        .order("datahora", { ascending: false })
+        .limit(500);
+
+      if (error) throw error;
+
+      return res.json({ ok: true, notifications: data ?? [] });
+    }
+
+    // -------------------------
+    // USUÁRIO NORMAL
+    // -------------------------
+    const partyId = s(user?.party_id);
 
     const { data: party } = await supabaseAdmin
       .from("omie_parties")
-      .select("id, name, cpf_cnpj, omie_code")
+      .select("id, cpf_cnpj, omie_code")
       .eq("id", partyId)
       .maybeSingle();
 
     if (!party) return res.status(404).json({ ok: false });
 
-    const notifications = await fetchNotificationsForParty(party);
+    // 1) projetos do cliente
+    let codProjetos: string[] = [];
 
-    res.json({ ok: true, notifications });
+    if (party.omie_code) {
+      const { data } = await supabaseAdmin
+        .from("omie_mf_movements")
+        .select("cod_projeto")
+        .eq("cod_cliente", party.omie_code);
+
+      codProjetos = uniq((data ?? []).map((r: any) => s(r.cod_projeto)).filter(Boolean));
+    }
+
+    // 2) nomes dos projetos
+    let projectNames: string[] = [];
+    if (codProjetos.length) {
+      const { data } = await supabaseAdmin
+        .from("omie_projects")
+        .select("name")
+        .in("omie_internal_code", codProjetos);
+
+      projectNames = uniq((data ?? []).map((p: any) => s(p.name)).filter(Boolean));
+    }
+
+    // 3) buscar notificações
+    let query = supabaseAdmin
+      .from("notifications")
+      .select("*")
+      .order("datahora", { ascending: false })
+      .limit(200);
+
+    if (projectNames.length) {
+      const inList = projectNames.map((n) => `"${n}"`).join(",");
+      query = query.or(`codigo_imovel.is.null,codigo_imovel.in.(${inList})`);
+    } else {
+      query = query.is("codigo_imovel", null);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return res.json({ ok: true, notifications: data ?? [] });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -108,7 +99,14 @@ router.get("/", requireAuth, async (req, res) => {
  */
 router.get("/unread-count", requireAuth, async (req, res) => {
   try {
-    const partyId = s((req as any).user?.party_id);
+    const user = (req as any).user;
+
+    // ✅ ADMIN: tudo como lido (ou 0)
+    if (user?.is_admin) {
+      return res.json({ ok: true, unread: 0 });
+    }
+
+    const partyId = s(user?.party_id);
 
     const { data: party } = await supabaseAdmin
       .from("omie_parties")
@@ -118,8 +116,11 @@ router.get("/unread-count", requireAuth, async (req, res) => {
 
     if (!party) return res.json({ ok: true, unread: 0 });
 
-    const notifications = await fetchNotificationsForParty(party);
-    const ids = notifications.map((n: any) => n.id);
+    const { data: notifications } = await supabaseAdmin
+      .from("notifications")
+      .select("id");
+
+    const ids = (notifications ?? []).map((n: any) => n.id);
 
     const { data: reads } = await supabaseAdmin
       .from("notification_reads")
@@ -141,18 +142,20 @@ router.get("/unread-count", requireAuth, async (req, res) => {
  */
 router.post("/mark-read", requireAuth, async (req, res) => {
   try {
-    const partyId = s((req as any).user?.party_id);
+    const user = (req as any).user;
 
-    const { data: party } = await supabaseAdmin
-      .from("omie_parties")
-      .select("id, cpf_cnpj, omie_code")
-      .eq("id", partyId)
-      .maybeSingle();
+    // ✅ ADMIN: nada para marcar
+    if (user?.is_admin) {
+      return res.json({ ok: true, marked: 0 });
+    }
 
-    if (!party) return res.json({ ok: true, marked: 0 });
+    const partyId = s(user?.party_id);
 
-    const notifications = await fetchNotificationsForParty(party);
-    const ids = notifications.map((n: any) => n.id);
+    const { data: notifications } = await supabaseAdmin
+      .from("notifications")
+      .select("id");
+
+    const ids = (notifications ?? []).map((n: any) => n.id);
 
     const rows = ids.map((id) => ({
       party_id: partyId,

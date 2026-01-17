@@ -7,11 +7,29 @@ const router = Router();
 
 /**
  * GET /me
- * Retorna dados do usuário logado a partir do party_id do token.
+ * Retorna dados do usuário logado.
+ * - Admin: retorna usuário virtual
+ * - Usuário normal: busca no banco
  */
 router.get("/me", requireAuth, async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
+
+    // ✅ ADMIN
+    if (user?.is_admin) {
+      return res.json({
+        ok: true,
+        party: {
+          id: "admin",
+          name: "Admin Triade",
+          firstName: "Admin",
+          cpf_cnpj: user.cpf_cnpj,
+          omie_code: null,
+          is_admin: true,
+        },
+      });
+    }
+
     const partyId = String(user?.party_id ?? "").trim();
 
     if (!partyId) {
@@ -43,6 +61,7 @@ router.get("/me", requireAuth, async (req: Request, res: Response) => {
         firstName,
         cpf_cnpj: party.cpf_cnpj ?? null,
         omie_code: party.omie_code ?? null,
+        is_admin: false,
       },
     });
   } catch (err: any) {
