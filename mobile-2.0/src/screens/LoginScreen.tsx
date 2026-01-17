@@ -32,6 +32,42 @@ type Props = NativeStackScreenProps<AuthStackParamList, "Login"> & {
   onSignedIn: () => void;
 };
 
+/**
+ * ✅ Máscara inteligente:
+ * - Até 11 dígitos: CPF 000.000.000-00
+ * - A partir de 12 dígitos: CNPJ 00.000.000/0000-00
+ */
+function formatCpfCnpj(input: string) {
+  const digits = input.replace(/\D/g, "").slice(0, 14);
+
+  // CPF (0..11)
+  if (digits.length <= 11) {
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+    if (digits.length <= 9)
+      return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(
+      6,
+      9
+    )}-${digits.slice(9)}`;
+  }
+
+  // CNPJ (12..14)
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+  if (digits.length <= 8)
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+  if (digits.length <= 12)
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
+      5,
+      8
+    )}/${digits.slice(8)}`;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
+    5,
+    8
+  )}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+}
+
 export function LoginScreen({ navigation, onSignedIn }: Props) {
   const [cpf, setCpf] = useState("");
   const [password, setPassword] = useState("");
@@ -43,28 +79,20 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
   const rawCpf = useMemo(() => cpf.replace(/\D/g, ""), [cpf]);
 
   function handleCpfChange(text: string) {
-    const digits = text.replace(/\D/g, "").slice(0, 11);
-
-    let masked = digits;
-    if (digits.length > 3 && digits.length <= 6) {
-      masked = `${digits.slice(0, 3)}.${digits.slice(3)}`;
-    } else if (digits.length > 6 && digits.length <= 9) {
-      masked = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-    } else if (digits.length > 9) {
-      masked = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(
-        6,
-        9
-      )}-${digits.slice(9)}`;
-    }
-
-    setCpf(masked);
+    setCpf(formatCpfCnpj(text));
   }
 
   async function handleLoginWithPassword() {
     setErrorMsg(null);
 
+    // ✅ agora aceita CPF (11) ou CNPJ (14)
     if (!rawCpf || !password) {
-      setErrorMsg("Informe CPF e senha.");
+      setErrorMsg("Informe CPF/CNPJ e senha.");
+      return;
+    }
+
+    if (![11, 14].includes(rawCpf.length)) {
+      setErrorMsg("Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) válido.");
       return;
     }
 
@@ -79,7 +107,7 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
       console.log("✅ [LoginScreen] login response:", data);
 
       if (!data?.ok || !data?.token) {
-        setErrorMsg(data?.error || "CPF ou senha inválidos.");
+        setErrorMsg(data?.error || "CPF/CNPJ ou senha inválidos.");
         return;
       }
 
@@ -88,7 +116,7 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
       const savedToken = await tokenStorage.get();
       console.log("🔐 [LoginScreen] token saved?", !!savedToken);
 
-      // ✅ salva nome + cpf p/ QuickAccess
+      // ✅ salva nome + cpf/cnpj p/ QuickAccess
       await quickAccessStorage.setUser(
         data.party?.name ?? "",
         data.party?.cpf_cnpj ?? rawCpf
@@ -186,10 +214,11 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
             </Text>
 
             <View style={styles.form}>
-              <Text style={styles.label}>CPF</Text>
+              <Text style={styles.label}>CPF / CNPJ</Text>
               <TextInput
                 style={styles.input}
-                placeholder="000.000.000-00"
+                // ✅ placeholder “inteligente”
+                placeholder="000.000.000-00 ou 00.000.000/0000-00"
                 placeholderTextColor="#8AA0B8"
                 keyboardType="numeric"
                 value={cpf}
@@ -221,7 +250,6 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
 
               {errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
 
-              {/* ✅ ÚNICA MUDANÇA: em vez de Alert, navega pra tela ForgotPassword */}
               <TouchableOpacity onPress={() => navigation.navigate("ForgotPassword")}>
                 <Text style={styles.forgotPassword}>Esqueci minha senha</Text>
               </TouchableOpacity>
