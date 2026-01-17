@@ -111,11 +111,14 @@ router.post("/admin/set-initial-password", async (req: Request, res: Response) =
  * POST /auth/login
  * Body: { cpf_cnpj, cpf, password }
  * (aceita cpf OU cpf_cnpj para compatibilidade com o mobile)
+ *
+ * ✅ Admin login (sem banco):
+ * - CNPJ e senha vêm de ENV no Render:
+ *   ADMIN_CNPJ, ADMIN_PASSWORD
  */
 router.post("/login", async (req: Request, res: Response) => {
   try {
     const rawCpf = String(req.body?.cpf_cnpj || req.body?.cpf || "").trim();
-
     const cpfDigits = onlyDigits(rawCpf);
     const password = String(req.body?.password || "");
 
@@ -123,6 +126,37 @@ router.post("/login", async (req: Request, res: Response) => {
       return res.status(400).json({ ok: false, error: "Credenciais inválidas" });
     }
 
+    // ✅ ADMIN LOGIN (sem banco)
+    const adminCnpj = onlyDigits(process.env.ADMIN_CNPJ || "");
+    const adminPassword = String(process.env.ADMIN_PASSWORD || "");
+
+    const isAdminLogin =
+      adminCnpj.length === 14 &&
+      adminPassword.length > 0 &&
+      cpfDigits === adminCnpj &&
+      password === adminPassword;
+
+    if (isAdminLogin) {
+      const token = signToken({
+        party_id: "admin",
+        cpf_cnpj: adminCnpj,
+        is_admin: true,
+      });
+
+      return res.json({
+        ok: true,
+        token,
+        must_change_password: false,
+        party: {
+          id: "admin",
+          name: "Admin Triade",
+          cpf_cnpj: adminCnpj,
+          omie_code: null,
+        },
+      });
+    }
+
+    // 🔍 login normal
     const { data: party, error: partyErr } = await supabaseAdmin
       .from("omie_parties")
       .select("id, name, cpf_cnpj, omie_code")
@@ -158,6 +192,7 @@ router.post("/login", async (req: Request, res: Response) => {
     const token = signToken({
       party_id: party.id,
       cpf_cnpj: party.cpf_cnpj,
+      is_admin: false,
     });
 
     return res.json({

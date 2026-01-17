@@ -7,6 +7,7 @@ const router = Router();
 type JwtPayload = {
   party_id?: string;
   cpf_cnpj?: string;
+  is_admin?: boolean;
 };
 
 function requireAuth(req: any, res: any, next: any) {
@@ -26,6 +27,7 @@ function requireAuth(req: any, res: any, next: any) {
     req.user = {
       cpf_cnpj: decoded?.cpf_cnpj,
       party_id: decoded?.party_id,
+      is_admin: !!decoded?.is_admin,
     };
 
     return next();
@@ -44,13 +46,83 @@ const norm = (v: any) => String(v ?? "").trim();
  *    omie_mf_movements.cod_cliente == omie_code => pega cod_projeto
  *    omie_projects.omie_internal_code in cod_projeto => pega name
  *    operations.name in projectNames => retorna operações
+ *
+ * ✅ Admin:
+ * - Se token.is_admin === true, retorna TODAS as operações (sem filtro).
  */
 router.get("/", requireAuth, async (req: any, res) => {
-  const cpfCnpj = norm(req.user?.cpf_cnpj);
-
-  console.log("🧩 [/operations] cpf_cnpj(token) =", cpfCnpj);
+  const isAdmin = !!req.user?.is_admin;
 
   try {
+    // ✅ ADMIN: não filtra nada
+    if (isAdmin) {
+      console.log("🛡️ [/operations] ADMIN MODE: returning all operations");
+
+      const opsResp = await supabaseAdmin.from("operations").select("*");
+
+      if (opsResp.error) {
+        console.error("❌ [/operations][ADMIN] operations error:", opsResp.error);
+        return res
+          .status(500)
+          .json({ ok: false, error: "Falha ao buscar operações (operations)" });
+      }
+
+      const ops = opsResp.data ?? [];
+
+      const normalized = ops.map((op: any) => {
+        const statusRaw = norm(op.status).toLowerCase();
+
+        const status =
+          statusRaw.includes("andamento")
+            ? "em_andamento"
+            : statusRaw.includes("final") || statusRaw.includes("conclu")
+            ? "concluida"
+            : op.status ?? "em_andamento";
+
+        return {
+          id: op.id,
+          propertyName: op.name,
+          city: op.city,
+          state: op.state,
+          status,
+
+          roi: Number(op.expected_roi ?? 0),
+          realizedProfit: Number(op.realized_profit ?? 0),
+          totalCosts: Number(op.total_costs ?? 0),
+
+          estimatedTerm: op.estimated_term_months ?? "",
+          realizedTerm: op.realized_term_months ?? "",
+
+          documents: {
+            cartaArrematacao: op.link_arrematacao ?? "",
+            matriculaConsolidada: op.link_matricula ?? "",
+            contratoScp: op.link_contrato_scp ?? "",
+          },
+
+          photoUrl: op.photo_url ?? null,
+
+          auction_date: op.auction_date ?? null,
+          itbi_date: op.itbi_date ?? null,
+          deed_date: op.deed_date ?? null,
+          registry_date: op.registry_date ?? null,
+          vacancy_date: op.vacancy_date ?? null,
+          construction_date: op.construction_date ?? null,
+          listed_to_broker_date: op.listed_to_broker_date ?? null,
+          sale_contract_date: op.sale_contract_date ?? null,
+          sale_receipt_date: op.sale_receipt_date ?? null,
+        };
+      });
+
+      return res.status(200).json(normalized);
+    }
+
+    // ---------------------------
+    // ✅ USUÁRIO NORMAL (filtro atual)
+    // ---------------------------
+    const cpfCnpj = norm(req.user?.cpf_cnpj);
+
+    console.log("🧩 [/operations] cpf_cnpj(token) =", cpfCnpj);
+
     if (!cpfCnpj) {
       return res.status(400).json({ ok: false, error: "cpf_cnpj ausente no token" });
     }
@@ -82,7 +154,9 @@ router.get("/", requireAuth, async (req: any, res) => {
 
     if (movesResp.error) {
       console.error("❌ [/operations] omie_mf_movements error:", movesResp.error);
-      return res.status(500).json({ ok: false, error: "Falha ao buscar movimentos (omie_mf_movements)" });
+      return res
+        .status(500)
+        .json({ ok: false, error: "Falha ao buscar movimentos (omie_mf_movements)" });
     }
 
     const projectCodes = Array.from(
@@ -113,7 +187,6 @@ router.get("/", requireAuth, async (req: any, res) => {
     if (projectNames.length === 0) return res.status(200).json([]);
 
     // 4) Operações (planilha) -> filtra por name
-    // ✅ IMPORTANTE: não referenciar coluna "roi" aqui (não existe na tabela)
     const opsResp = await supabaseAdmin
       .from("operations")
       .select("*")
@@ -144,12 +217,8 @@ router.get("/", requireAuth, async (req: any, res) => {
         state: op.state,
         status,
 
-        // ✅ ROI vem da planilha (coluna expected_roi)
         roi: Number(op.expected_roi ?? 0),
-
         realizedProfit: Number(op.realized_profit ?? 0),
-
-        // Custos Omie ficam na rota separada /operation-costs
         totalCosts: Number(op.total_costs ?? 0),
 
         estimatedTerm: op.estimated_term_months ?? "",
@@ -161,10 +230,8 @@ router.get("/", requireAuth, async (req: any, res) => {
           contratoScp: op.link_contrato_scp ?? "",
         },
 
-        // ✅ foto (coluna nova)
         photoUrl: op.photo_url ?? null,
 
-        // TIMELINE DATES (vêm da tabela operations)
         auction_date: op.auction_date ?? null,
         itbi_date: op.itbi_date ?? null,
         deed_date: op.deed_date ?? null,
