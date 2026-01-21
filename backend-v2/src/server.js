@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
-require("dotenv/config");
 // Rotas base
 const health_1 = __importDefault(require("./routes/health"));
 // Sync
@@ -18,7 +17,7 @@ const auth_1 = __importDefault(require("./routes/auth"));
 const operations_1 = __importDefault(require("./routes/operations"));
 const operation_costs_1 = __importDefault(require("./routes/operation-costs"));
 const operation_financial_1 = __importDefault(require("./routes/operation-financial"));
-const me_1 = __importDefault(require("./routes/me")); // ajuste o caminho
+const me_1 = __importDefault(require("./routes/me"));
 const notifications_1 = __importDefault(require("./routes/notifications"));
 const push_1 = __importDefault(require("./routes/push"));
 const push_dispatch_1 = __importDefault(require("./routes/push-dispatch"));
@@ -31,10 +30,19 @@ const app = (0, express_1.default)();
 ========================= */
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
+// ✅ DEBUG GLOBAL — MUITO IMPORTANTE
+app.use((req, _res, next) => {
+    console.log(`[REQ] ${req.method} ${req.path}`);
+    next();
+});
 /* =========================
    Rotas públicas
 ========================= */
 app.use("/health", health_1.default);
+// ✅ PING SIMPLES (debug mobile)
+app.get("/ping", (_req, res) => {
+    res.json({ ok: true, ts: new Date().toISOString() });
+});
 /* =========================
    Rotas de sincronização
 ========================= */

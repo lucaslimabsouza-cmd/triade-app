@@ -1,7 +1,6 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import "dotenv/config";
 
 // Rotas base
 import healthRouter from "./routes/health";
@@ -15,22 +14,15 @@ import authRouter from "./routes/auth";
 
 // App
 import operationsRouter from "./routes/operations";
-
 import operationCostsRouter from "./routes/operation-costs";
 import operationFinancialRoutes from "./routes/operation-financial";
-import meRouter from "./routes/me"; // ajuste o caminho
+import meRouter from "./routes/me";
 import notificationsRouter from "./routes/notifications";
 import pushRouter from "./routes/push";
 import pushDispatchRouter from "./routes/push-dispatch";
 import passwordResetRouter from "./routes/passwordReset";
 import cronRoutes from "./routes/cron";
 import cronSyncAllRouter from "./routes/cron-sync-all";
-
-
-
-
-
-
 
 const app = express();
 
@@ -40,10 +32,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ✅ DEBUG GLOBAL — MUITO IMPORTANTE
+app.use((req, _res, next) => {
+  console.log(`[REQ] ${req.method} ${req.path}`);
+  next();
+});
+
 /* =========================
    Rotas públicas
 ========================= */
 app.use("/health", healthRouter);
+
+// ✅ PING SIMPLES (debug mobile)
+app.get("/ping", (_req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
+});
 
 /* =========================
    Rotas de sincronização
@@ -69,14 +72,8 @@ app.use(passwordResetRouter);
 app.use(cronRoutes);
 app.use(cronSyncAllRouter);
 
-
-
-
-
 app.use("/operation-costs", operationCostsRouter);
 console.log("✅ route mounted: /operation-costs");
-
-
 
 /* =========================
    Start server
