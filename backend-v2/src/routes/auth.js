@@ -34,6 +34,61 @@ function requireAuth(req, res, next) {
         return res.status(401).json({ ok: false, error: "Token inválido" });
     }
 }
+/**
+ * Busca party por CPF/CNPJ aceitando:
+ * - sem máscara (digits)
+ * - com máscara (raw)
+ * - variações no banco (espaços, máscara diferente)
+ *
+ * Estratégia:
+ * 1) tenta eq raw
+ * 2) tenta eq digits
+ * 3) fallback: busca candidatos e filtra por onlyDigits(cpf_cnpj) === digits
+ */
+async function findPartyByCpfCnpj(rawCpfCnpj) {
+    const raw = String(rawCpfCnpj || "").trim();
+    const digits = onlyDigits(raw);
+    if (![11, 14].includes(digits.length))
+        return null;
+    // 1) match direto (raw)
+    {
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from("omie_parties")
+            .select("id, name, cpf_cnpj, omie_code")
+            .eq("cpf_cnpj", raw)
+            .maybeSingle();
+        if (error)
+            throw error;
+        if (data)
+            return data;
+    }
+    // 2) match direto (digits)
+    {
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from("omie_parties")
+            .select("id, name, cpf_cnpj, omie_code")
+            .eq("cpf_cnpj", digits)
+            .maybeSingle();
+        if (error)
+            throw error;
+        if (data)
+            return data;
+    }
+    // 3) fallback: busca candidatos (pode vir com máscara/ruído) e filtra em memória
+    //    Usa LIKE no banco para reduzir, mas garante pelo filtro onlyDigits.
+    {
+        const like = `%${digits}%`;
+        const { data, error } = await supabase_1.supabaseAdmin
+            .from("omie_parties")
+            .select("id, name, cpf_cnpj, omie_code")
+            .ilike("cpf_cnpj", like)
+            .limit(50);
+        if (error)
+            throw error;
+        const hit = (data || []).find((p) => onlyDigits(p?.cpf_cnpj) === digits);
+        return hit ?? null;
+    }
+}
 /* =========================
    ADMIN — Criar senha inicial
 ========================= */
@@ -57,14 +112,7 @@ router.post("/admin/set-initial-password", async (req, res) => {
                 error: "CPF/CNPJ inválido ou senha fraca (mín. 8 caracteres)",
             });
         }
-        // 🔍 Busca flexível (com máscara ou sem)
-        const { data: party, error: partyErr } = await supabase_1.supabaseAdmin
-            .from("omie_parties")
-            .select("id, name, cpf_cnpj, omie_code")
-            .or(`cpf_cnpj.eq.${rawCpf},cpf_cnpj.eq.${cpfDigits},cpf_cnpj.ilike.%${cpfDigits}%`)
-            .maybeSingle();
-        if (partyErr)
-            throw partyErr;
+        const party = await findPartyByCpfCnpj(rawCpf);
         if (!party) {
             return res.status(404).json({ ok: false, error: "Pessoa não encontrada" });
         }
@@ -109,13 +157,7 @@ router.post("/login", async (req, res) => {
         if (![11, 14].includes(cpfDigits.length) || !password) {
             return res.status(400).json({ ok: false, error: "Credenciais inválidas" });
         }
-        const { data: party, error: partyErr } = await supabase_1.supabaseAdmin
-            .from("omie_parties")
-            .select("id, name, cpf_cnpj, omie_code")
-            .or(`cpf_cnpj.eq.${rawCpf},cpf_cnpj.eq.${cpfDigits},cpf_cnpj.ilike.%${cpfDigits}%`)
-            .maybeSingle();
-        if (partyErr)
-            throw partyErr;
+        const party = await findPartyByCpfCnpj(rawCpf);
         if (!party) {
             return res.status(401).json({ ok: false, error: "Credenciais inválidas" });
         }
