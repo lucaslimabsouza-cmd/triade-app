@@ -30,18 +30,21 @@ const app = (0, express_1.default)();
 ========================= */
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
-// ✅ DEBUG GLOBAL — MUITO IMPORTANTE
-app.use((req, _res, next) => {
-    console.log(`[REQ] ${req.method} ${req.path}`);
+// ✅ DEBUG GLOBAL: loga rota + status + tempo (não loga body)
+app.use((req, res, next) => {
+    const t0 = Date.now();
+    res.on("finish", () => {
+        console.log(`[REQ] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - t0}ms)`);
+    });
     next();
 });
 /* =========================
    Rotas públicas
 ========================= */
 app.use("/health", health_1.default);
-// ✅ PING SIMPLES (debug mobile)
+// ✅ Ping simples pra testar no celular
 app.get("/ping", (_req, res) => {
-    res.json({ ok: true, ts: new Date().toISOString() });
+    return res.json({ ok: true, ts: new Date().toISOString() });
 });
 /* =========================
    Rotas de sincronização

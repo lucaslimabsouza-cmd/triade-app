@@ -14,6 +14,7 @@ import authRouter from "./routes/auth";
 
 // App
 import operationsRouter from "./routes/operations";
+
 import operationCostsRouter from "./routes/operation-costs";
 import operationFinancialRoutes from "./routes/operation-financial";
 import meRouter from "./routes/me";
@@ -32,9 +33,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ DEBUG GLOBAL — MUITO IMPORTANTE
-app.use((req, _res, next) => {
-  console.log(`[REQ] ${req.method} ${req.path}`);
+// ✅ DEBUG GLOBAL: loga rota + status + tempo (não loga body)
+app.use((req, res, next) => {
+  const t0 = Date.now();
+
+  res.on("finish", () => {
+    console.log(
+      `[REQ] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - t0}ms)`
+    );
+  });
+
   next();
 });
 
@@ -43,9 +51,9 @@ app.use((req, _res, next) => {
 ========================= */
 app.use("/health", healthRouter);
 
-// ✅ PING SIMPLES (debug mobile)
+// ✅ Ping simples pra testar no celular
 app.get("/ping", (_req, res) => {
-  res.json({ ok: true, ts: new Date().toISOString() });
+  return res.json({ ok: true, ts: new Date().toISOString() });
 });
 
 /* =========================
