@@ -24,6 +24,7 @@ const push_1 = __importDefault(require("./routes/push"));
 const push_dispatch_1 = __importDefault(require("./routes/push-dispatch"));
 const passwordReset_1 = __importDefault(require("./routes/passwordReset"));
 const cron_1 = __importDefault(require("./routes/cron"));
+const cron_sync_all_1 = __importDefault(require("./routes/cron-sync-all"));
 const app = (0, express_1.default)();
 /* =========================
    Middlewares
@@ -54,6 +55,7 @@ app.use("/push", push_1.default);
 app.use("/push", push_dispatch_1.default);
 app.use(passwordReset_1.default);
 app.use(cron_1.default);
+app.use(cron_sync_all_1.default);
 app.use("/operation-costs", operation_costs_1.default);
 console.log("✅ route mounted: /operation-costs");
 /* =========================

@@ -4,6 +4,10 @@ import { omieFetchAllPaged } from "../omie/omiePaged";
 
 const SOURCE = "omie_projects";
 
+function s(v: any) {
+  return String(v ?? "").trim();
+}
+
 export async function syncOmieProjects() {
   const last = await getLastSyncAt(SOURCE);
   const since = last ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -13,24 +17,31 @@ export async function syncOmieProjects() {
     call: "ListarProjetos",
     baseParams: {
       registros_por_pagina: 200,
-      // dt_alt_de: since,
+      // dt_alt_de: since, // se você confirmar que o Omie aceita, ativamos
     },
   });
 
-  const payloads = items
-    .map((x) => ({
-      omie_internal_code: String(x.codigo ?? x.omie_internal_code ?? x.codigo_projeto ?? "").trim(),
-      omie_code: x.codigo_externo ?? x.omie_code ?? null,
-      name: x.nome ?? x.descricao ?? null,
-      raw_payload: x,
-      updated_at: new Date().toISOString(),
-    }))
-    .filter((p) => !!p.omie_internal_code);
+  const payloads = (items || [])
+    .map((x) => {
+      const internal = s(x.codigo ?? x.omie_internal_code ?? x.codigo_projeto ?? x.id);
+      if (!internal) return null;
+
+      const external = s(x.codigo_externo ?? x.omie_code);
+      return {
+        omie_internal_code: internal,         // ✅ chave principal
+        omie_code: external || internal,      // ✅ nunca null (resolve NOT NULL)
+        name: x.nome ?? x.descricao ?? null,
+        raw_payload: x,
+        updated_at: new Date().toISOString(),
+      };
+    })
+    .filter(Boolean) as any[];
 
   if (payloads.length) {
     const { error } = await supabaseAdmin
       .from("omie_projects")
       .upsert(payloads, { onConflict: "omie_internal_code" });
+
     if (error) throw new Error(error.message);
   }
 
