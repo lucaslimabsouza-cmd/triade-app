@@ -65,18 +65,23 @@ function excelDateToISO(v) {
     const dt = new Date(t);
     if (!isNaN(dt.getTime()))
         return dt.toISOString();
-    return t; // fallback
+    return t;
 }
+/**
+ * ✅ Name no Supabase vem de "Descrição do Imóvel" no Excel
+ * (mantém fallbacks caso algum dia você mude o cabeçalho)
+ */
 function pickOperationName(o) {
-    // você disse: chave = Name (mas deixo robusto)
-    return s(o?.Name ??
+    return s(o?.["Descrição do Imóvel"] ??
+        o?.["Descricao do Imovel"] ??
+        o?.["DESCRIÇÃO DO IMÓVEL"] ??
+        o?.["DESCRICAO DO IMOVEL"] ??
+        o?.descricao_imovel ??
+        o?.descricaoDoImovel ??
+        o?.Descricao ??
+        o?.descricao ??
+        o?.Name ??
         o?.name ??
-        o?.NOME ??
-        o?.Nome ??
-        o?.CodigoImovel ??
-        o?.codigo_imovel ??
-        o?.Codigo ??
-        o?.code ??
         "");
 }
 async function syncExcelOperations() {
@@ -93,12 +98,12 @@ async function syncExcelOperations() {
     async function flush() {
         if (!batch.length)
             return;
-        const { error } = await supabase_1.supabaseAdmin.from("operations").upsert(batch, {
-            onConflict: "name",
-        });
+        const { error } = await supabase_1.supabaseAdmin
+            .from("operations")
+            .upsert(batch, { onConflict: "name" });
         if (error)
             throw new Error(error.message);
-        // OBS: Supabase não retorna “quantos realmente mudou”, então contamos tentativas.
+        // Conta tentativas enviadas ao upsert (não “linhas realmente alteradas”)
         upserted += batch.length;
         batch.length = 0;
     }
@@ -111,7 +116,6 @@ async function syncExcelOperations() {
         }
         batch.push({
             name,
-            // ⚠️ Ajuste aqui se seus cabeçalhos forem diferentes.
             auction_date: excelDateToISO(o.auction_date ?? o.AuctionDate ?? o.Arrematacao ?? o.Arrematação),
             itbi_date: excelDateToISO(o.itbi_date ?? o.ITBI ?? o.ItbiDate ?? o["pagamento do ITBI"]),
             deed_date: excelDateToISO(o.deed_date ?? o.DeedDate ?? o.Escritura ?? o["Escritura de compra e venda"]),

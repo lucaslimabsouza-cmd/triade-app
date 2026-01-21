@@ -30,20 +30,25 @@ function excelDateToISO(v: any): string | null {
   const dt = new Date(t);
   if (!isNaN(dt.getTime())) return dt.toISOString();
 
-  return t; // fallback
+  return t;
 }
 
+/**
+ * ✅ Name no Supabase vem de "Descrição do Imóvel" no Excel
+ * (mantém fallbacks caso algum dia você mude o cabeçalho)
+ */
 function pickOperationName(o: any): string {
-  // você disse: chave = Name (mas deixo robusto)
   return s(
-    o?.Name ??
+    o?.["Descrição do Imóvel"] ??
+      o?.["Descricao do Imovel"] ??
+      o?.["DESCRIÇÃO DO IMÓVEL"] ??
+      o?.["DESCRICAO DO IMOVEL"] ??
+      o?.descricao_imovel ??
+      o?.descricaoDoImovel ??
+      o?.Descricao ??
+      o?.descricao ??
+      o?.Name ??
       o?.name ??
-      o?.NOME ??
-      o?.Nome ??
-      o?.CodigoImovel ??
-      o?.codigo_imovel ??
-      o?.Codigo ??
-      o?.code ??
       ""
   );
 }
@@ -65,13 +70,13 @@ export async function syncExcelOperations() {
 
   async function flush() {
     if (!batch.length) return;
+    const { error } = await supabaseAdmin
+      .from("operations")
+      .upsert(batch, { onConflict: "name" });
 
-    const { error } = await supabaseAdmin.from("operations").upsert(batch, {
-      onConflict: "name",
-    });
     if (error) throw new Error(error.message);
 
-    // OBS: Supabase não retorna “quantos realmente mudou”, então contamos tentativas.
+    // Conta tentativas enviadas ao upsert (não “linhas realmente alteradas”)
     upserted += batch.length;
     batch.length = 0;
   }
@@ -88,27 +93,41 @@ export async function syncExcelOperations() {
     batch.push({
       name,
 
-      // ⚠️ Ajuste aqui se seus cabeçalhos forem diferentes.
-      auction_date: excelDateToISO(o.auction_date ?? o.AuctionDate ?? o.Arrematacao ?? o.Arrematação),
-      itbi_date: excelDateToISO(o.itbi_date ?? o.ITBI ?? o.ItbiDate ?? o["pagamento do ITBI"]),
-      deed_date: excelDateToISO(o.deed_date ?? o.DeedDate ?? o.Escritura ?? o["Escritura de compra e venda"]),
-      registry_date: excelDateToISO(o.registry_date ?? o.RegistryDate ?? o.Registro ?? o["registro em matrícula"]),
-      vacancy_date: excelDateToISO(o.vacancy_date ?? o.VacancyDate ?? o.Desocupacao ?? o.Desocupação),
-      construction_date: excelDateToISO(o.construction_date ?? o.ConstructionDate ?? o.Obra ?? o.Reforma),
+      auction_date: excelDateToISO(
+        o.auction_date ?? o.AuctionDate ?? o.Arrematacao ?? o.Arrematação
+      ),
+      itbi_date: excelDateToISO(
+        o.itbi_date ?? o.ITBI ?? o.ItbiDate ?? o["pagamento do ITBI"]
+      ),
+      deed_date: excelDateToISO(
+        o.deed_date ?? o.DeedDate ?? o.Escritura ?? o["Escritura de compra e venda"]
+      ),
+      registry_date: excelDateToISO(
+        o.registry_date ?? o.RegistryDate ?? o.Registro ?? o["registro em matrícula"]
+      ),
+      vacancy_date: excelDateToISO(
+        o.vacancy_date ?? o.VacancyDate ?? o.Desocupacao ?? o.Desocupação
+      ),
+      construction_date: excelDateToISO(
+        o.construction_date ?? o.ConstructionDate ?? o.Obra ?? o.Reforma
+      ),
       listed_to_broker_date: excelDateToISO(
         o.listed_to_broker_date ??
           o.ListedToBrokerDate ??
           o.Imobiliaria ??
           o["Disponibilizado para imobiliária"]
       ),
-      sale_contract_date: excelDateToISO(o.sale_contract_date ?? o.SaleContractDate ?? o["contrato de venda"]),
-      sale_reciept_date: excelDateToISO(o.sale_reciept_date ?? o.SaleRecieptDate ?? o["recebimento da venda"]),
+      sale_contract_date: excelDateToISO(
+        o.sale_contract_date ?? o.SaleContractDate ?? o["contrato de venda"]
+      ),
+      sale_reciept_date: excelDateToISO(
+        o.sale_reciept_date ?? o.SaleRecieptDate ?? o["recebimento da venda"]
+      ),
     });
 
     if (batch.length >= BATCH_SIZE) await flush();
   }
 
   await flush();
-
   return { rows, upserted, skippedNoName };
 }

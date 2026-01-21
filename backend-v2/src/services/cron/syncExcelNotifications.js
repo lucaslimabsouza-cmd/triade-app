@@ -83,7 +83,9 @@ async function syncExcelNotifications() {
     async function flush() {
         if (!batch.length)
             return;
-        const { error } = await supabase_1.supabaseAdmin.from("notifications").upsert(batch, { onConflict: "source_id" });
+        const { error } = await supabase_1.supabaseAdmin
+            .from("notifications")
+            .upsert(batch, { onConflict: "source_id" });
         if (error)
             throw new Error(error.message);
         upserted += batch.length;
@@ -91,7 +93,7 @@ async function syncExcelNotifications() {
     }
     for (const n of items || []) {
         rows++;
-        const source_id = s(n.ID ?? n.Id ?? n.id);
+        const source_id = s(n.ID ?? n.Id ?? n.id ?? n.SourceId ?? n.source_id);
         if (!source_id) {
             skippedNoId++;
             continue;
