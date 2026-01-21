@@ -27,30 +27,70 @@ function excelDateToISO(v: any): string | null {
   const t = s(v);
   if (!t) return null;
 
+  // aceita "6/2/2025" etc
   const dt = new Date(t);
   if (!isNaN(dt.getTime())) return dt.toISOString();
 
   return t;
 }
 
+function parseBRMoney(v: any): number | null {
+  const t = s(v);
+  if (!t) return null;
+
+  // Ex: "R$ 76.124,00"
+  const cleaned = t
+    .replace(/\s/g, "")
+    .replace(/^R\$/i, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseBRPercent(v: any): number | null {
+  const t = s(v);
+  if (!t) return null;
+
+  // Ex: "36,00%"
+  const cleaned = t.replace("%", "").replace(/\./g, "").replace(",", ".");
+  const n = Number(cleaned);
+  if (!Number.isFinite(n)) return null;
+
+  // seu banco parece guardar 0.3000 (30%)
+  return n / 100;
+}
+
+function parseNumber(v: any): number | null {
+  const t = s(v);
+  if (!t) return null;
+  const n = Number(t.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
- * ✅ Name no Supabase vem de "Descrição do Imóvel" no Excel
- * (mantém fallbacks caso algum dia você mude o cabeçalho)
+ * Excel "Descrição do Imóvel" => operations.name
+ * Ex: "SCP0109 Casa Montes Claros"
  */
-function pickOperationName(o: any): string {
+function pickName(o: any): string {
   return s(
     o?.["Descrição do Imóvel"] ??
       o?.["Descricao do Imovel"] ??
-      o?.["DESCRIÇÃO DO IMÓVEL"] ??
-      o?.["DESCRICAO DO IMOVEL"] ??
-      o?.descricao_imovel ??
-      o?.descricaoDoImovel ??
-      o?.Descricao ??
       o?.descricao ??
-      o?.Name ??
+      o?.Descricao ??
       o?.name ??
+      o?.Name ??
       ""
   );
+}
+
+/**
+ * Tenta extrair code (ex: SCP0109) da descrição.
+ */
+function extractCodeFromName(name: string): string | null {
+  const m = name.match(/\bSCP\d+\b/i);
+  return m ? m[0].toUpperCase() : null;
 }
 
 export async function syncExcelOperations() {
@@ -70,13 +110,13 @@ export async function syncExcelOperations() {
 
   async function flush() {
     if (!batch.length) return;
+
     const { error } = await supabaseAdmin
       .from("operations")
       .upsert(batch, { onConflict: "name" });
 
     if (error) throw new Error(error.message);
 
-    // Conta tentativas enviadas ao upsert (não “linhas realmente alteradas”)
     upserted += batch.length;
     batch.length = 0;
   }
@@ -84,45 +124,52 @@ export async function syncExcelOperations() {
   for (const o of items || []) {
     rows++;
 
-    const name = pickOperationName(o);
+    const name = pickName(o);
     if (!name) {
       skippedNoName++;
       continue;
     }
 
-    batch.push({
-      name,
+    const code =
+      s(o?.code ?? o?.Code ?? o?.["Código"] ?? "") || extractCodeFromName(name);
 
-      auction_date: excelDateToISO(
-        o.auction_date ?? o.AuctionDate ?? o.Arrematacao ?? o.Arrematação
-      ),
-      itbi_date: excelDateToISO(
-        o.itbi_date ?? o.ITBI ?? o.ItbiDate ?? o["pagamento do ITBI"]
-      ),
-      deed_date: excelDateToISO(
-        o.deed_date ?? o.DeedDate ?? o.Escritura ?? o["Escritura de compra e venda"]
-      ),
-      registry_date: excelDateToISO(
-        o.registry_date ?? o.RegistryDate ?? o.Registro ?? o["registro em matrícula"]
-      ),
-      vacancy_date: excelDateToISO(
-        o.vacancy_date ?? o.VacancyDate ?? o.Desocupacao ?? o.Desocupação
-      ),
-      construction_date: excelDateToISO(
-        o.construction_date ?? o.ConstructionDate ?? o.Obra ?? o.Reforma
-      ),
+    batch.push({
+      // chaves / infos principais
+      name,
+      code: code || null,
+      city: s(o?.["Cidade"] ?? o?.city ?? "") || null,
+      state: s(o?.["Estado"] ?? o?.state ?? "") || null,
+      status: s(o?.["Status"] ?? o?.status ?? "") || null,
+      photo_url: s(o?.["photo_url"] ?? o?.photo_url ?? "") || null,
+
+      // métricas
+      expected_profit: parseBRMoney(o?.["Lucro esperado"]) ?? null,
+      expected_roi: parseBRPercent(o?.["Roi esperado"]) ?? null,
+      estimated_term_months: parseNumber(o?.["Prazo estimado"]) ?? null,
+      realized_term_months: parseNumber(o?.["Prazo realizado"]) ?? null,
+
+      // datas (nomes exatamente como estão no Excel)
+      auction_date: excelDateToISO(o?.["Data Arrematação"]),
+      itbi_date: excelDateToISO(o?.["Data ITBI"]),
+      deed_date: excelDateToISO(o?.["Data Escritura de compra e venda"]),
+      registry_date: excelDateToISO(o?.["Data Matrícula"]),
+      vacancy_date: excelDateToISO(o?.["Data desocupação"]),
+      construction_date: excelDateToISO(o?.["Data Obra"]),
       listed_to_broker_date: excelDateToISO(
-        o.listed_to_broker_date ??
-          o.ListedToBrokerDate ??
-          o.Imobiliaria ??
-          o["Disponibilizado para imobiliária"]
+        o?.["Data Disponibilizado para imobiliária"]
       ),
-      sale_contract_date: excelDateToISO(
-        o.sale_contract_date ?? o.SaleContractDate ?? o["contrato de venda"]
-      ),
-      sale_reciept_date: excelDateToISO(
-        o.sale_reciept_date ?? o.SaleRecieptDate ?? o["recebimento da venda"]
-      ),
+      sale_contract_date: excelDateToISO(o?.["Data contrato de venda"]),
+
+      // ✅ NOME CORRETO NO SUPABASE:
+      sale_receipt_date: excelDateToISO(o?.["Data recebimento da venda"]),
+
+      // links
+      link_arrematacao: s(o?.["Link Carta de arrematação"]) || null,
+      link_matricula: s(o?.["Link Matricula consolidada"]) || null,
+      link_contrato_scp: s(o?.["Link Contrato Scp"]) || null,
+
+      source: "excel",
+      updated_at: new Date().toISOString(),
     });
 
     if (batch.length >= BATCH_SIZE) await flush();
