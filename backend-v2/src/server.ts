@@ -24,6 +24,7 @@ import pushRouter from "./routes/push";
 import pushDispatchRouter from "./routes/push-dispatch";
 import passwordResetRouter from "./routes/passwordReset";
 import cronRoutes from "./routes/cron";
+import cronSyncAllRouter from "./routes/cron-sync-all";
 
 
 
@@ -66,6 +67,7 @@ app.use("/push", pushRouter);
 app.use("/push", pushDispatchRouter);
 app.use(passwordResetRouter);
 app.use(cronRoutes);
+app.use(cronSyncAllRouter);
 
 
 
