@@ -30,7 +30,7 @@ const app = (0, express_1.default)();
 ========================= */
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
-// ✅ DEBUG GLOBAL: loga rota + status + tempo (não loga body)
+// ✅ DEBUG GLOBAL: rota + status + tempo
 app.use((req, res, next) => {
     const t0 = Date.now();
     res.on("finish", () => {
@@ -52,9 +52,16 @@ app.get("/ping", (_req, res) => {
 app.use("/sync/excel", excel_1.default);
 app.use("/sync/omie", omie_1.default);
 /* =========================
-   Autenticação
+   Autenticação (padrão)
 ========================= */
 app.use("/auth", auth_1.default);
+/**
+ * ✅ Compatibilidade (caso algum app/build antigo chame /login):
+ * Se o authRouter tem router.post("/login"), isso aqui vai funcionar.
+ */
+app.post("/login", (req, res, next) => {
+    return auth_1.default(req, res, next);
+});
 /* =========================
    App (logado)
 ========================= */

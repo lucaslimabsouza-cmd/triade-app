@@ -14,7 +14,6 @@ import authRouter from "./routes/auth";
 
 // App
 import operationsRouter from "./routes/operations";
-
 import operationCostsRouter from "./routes/operation-costs";
 import operationFinancialRoutes from "./routes/operation-financial";
 import meRouter from "./routes/me";
@@ -33,16 +32,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ DEBUG GLOBAL: loga rota + status + tempo (não loga body)
+// ✅ DEBUG GLOBAL: rota + status + tempo
 app.use((req, res, next) => {
   const t0 = Date.now();
-
   res.on("finish", () => {
     console.log(
       `[REQ] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - t0}ms)`
     );
   });
-
   next();
 });
 
@@ -63,9 +60,17 @@ app.use("/sync/excel", excelSyncRouter);
 app.use("/sync/omie", omieSyncRouter);
 
 /* =========================
-   Autenticação
+   Autenticação (padrão)
 ========================= */
 app.use("/auth", authRouter);
+
+/**
+ * ✅ Compatibilidade (caso algum app/build antigo chame /login):
+ * Se o authRouter tem router.post("/login"), isso aqui vai funcionar.
+ */
+app.post("/login", (req, res, next) => {
+  return (authRouter as any)(req, res, next);
+});
 
 /* =========================
    App (logado)
