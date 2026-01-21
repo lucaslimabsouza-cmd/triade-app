@@ -30,7 +30,7 @@ const app = (0, express_1.default)();
 ========================= */
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
-// ✅ DEBUG GLOBAL: rota + status + tempo
+// ✅ Log de request + status
 app.use((req, res, next) => {
     const t0 = Date.now();
     res.on("finish", () => {
@@ -42,7 +42,7 @@ app.use((req, res, next) => {
    Rotas públicas
 ========================= */
 app.use("/health", health_1.default);
-// ✅ Ping simples pra testar no celular
+// ✅ ping (pra teste rápido)
 app.get("/ping", (_req, res) => {
     return res.json({ ok: true, ts: new Date().toISOString() });
 });
@@ -52,14 +52,16 @@ app.get("/ping", (_req, res) => {
 app.use("/sync/excel", excel_1.default);
 app.use("/sync/omie", omie_1.default);
 /* =========================
-   Autenticação (padrão)
+   Autenticação
 ========================= */
 app.use("/auth", auth_1.default);
 /**
- * ✅ Compatibilidade (caso algum app/build antigo chame /login):
- * Se o authRouter tem router.post("/login"), isso aqui vai funcionar.
+ * ✅ Compatibilidade: builds antigos chamam POST /login
+ * Isso reaproveita o mesmo authRouter, assumindo que nele existe router.post("/login").
  */
 app.post("/login", (req, res, next) => {
+    // garante que o router receba o path que ele espera
+    req.url = "/login";
     return auth_1.default(req, res, next);
 });
 /* =========================

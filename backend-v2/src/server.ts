@@ -32,7 +32,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ DEBUG GLOBAL: rota + status + tempo
+// ✅ Log de request + status
 app.use((req, res, next) => {
   const t0 = Date.now();
   res.on("finish", () => {
@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 ========================= */
 app.use("/health", healthRouter);
 
-// ✅ Ping simples pra testar no celular
+// ✅ ping (pra teste rápido)
 app.get("/ping", (_req, res) => {
   return res.json({ ok: true, ts: new Date().toISOString() });
 });
@@ -60,15 +60,17 @@ app.use("/sync/excel", excelSyncRouter);
 app.use("/sync/omie", omieSyncRouter);
 
 /* =========================
-   Autenticação (padrão)
+   Autenticação
 ========================= */
 app.use("/auth", authRouter);
 
 /**
- * ✅ Compatibilidade (caso algum app/build antigo chame /login):
- * Se o authRouter tem router.post("/login"), isso aqui vai funcionar.
+ * ✅ Compatibilidade: builds antigos chamam POST /login
+ * Isso reaproveita o mesmo authRouter, assumindo que nele existe router.post("/login").
  */
 app.post("/login", (req, res, next) => {
+  // garante que o router receba o path que ele espera
+  req.url = "/login";
   return (authRouter as any)(req, res, next);
 });
 
