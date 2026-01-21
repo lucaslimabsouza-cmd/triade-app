@@ -11,6 +11,22 @@ const router = Router();
 
 const onlyDigits = (s = "") => String(s).replace(/\D/g, "");
 
+function formatCpfCnpjFromDigits(digits: string) {
+  const d = onlyDigits(digits);
+
+  if (d.length === 11) {
+    // CPF: 000.000.000-00
+    return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+  }
+
+  if (d.length === 14) {
+    // CNPJ: 00.000.000/0000-00
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+  }
+
+  return d;
+}
+
 function signToken(payload: any) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET não configurado");
@@ -35,62 +51,26 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-/**
- * Busca party por CPF/CNPJ aceitando:
- * - sem máscara (digits)
- * - com máscara (raw)
- * - variações no banco (espaços, máscara diferente)
- *
- * Estratégia:
- * 1) tenta eq raw
- * 2) tenta eq digits
- * 3) fallback: busca candidatos e filtra por onlyDigits(cpf_cnpj) === digits
- */
 async function findPartyByCpfCnpj(rawCpfCnpj: string) {
   const raw = String(rawCpfCnpj || "").trim();
   const digits = onlyDigits(raw);
-
   if (![11, 14].includes(digits.length)) return null;
 
-  // 1) match direto (raw)
-  {
-    const { data, error } = await supabaseAdmin
-      .from("omie_parties")
-      .select("id, name, cpf_cnpj, omie_code")
-      .eq("cpf_cnpj", raw)
-      .maybeSingle();
+  const formatted = formatCpfCnpjFromDigits(digits);
 
-    if (error) throw error;
-    if (data) return data;
-  }
+  // candidatos possíveis (com e sem máscara)
+  const candidates = Array.from(
+    new Set([raw, digits, formatted].map((x) => String(x || "").trim()).filter(Boolean))
+  );
 
-  // 2) match direto (digits)
-  {
-    const { data, error } = await supabaseAdmin
-      .from("omie_parties")
-      .select("id, name, cpf_cnpj, omie_code")
-      .eq("cpf_cnpj", digits)
-      .maybeSingle();
+  const { data, error } = await supabaseAdmin
+    .from("omie_parties")
+    .select("id, name, cpf_cnpj, omie_code")
+    .in("cpf_cnpj", candidates)
+    .maybeSingle();
 
-    if (error) throw error;
-    if (data) return data;
-  }
-
-  // 3) fallback: busca candidatos (pode vir com máscara/ruído) e filtra em memória
-  //    Usa LIKE no banco para reduzir, mas garante pelo filtro onlyDigits.
-  {
-    const like = `%${digits}%`;
-    const { data, error } = await supabaseAdmin
-      .from("omie_parties")
-      .select("id, name, cpf_cnpj, omie_code")
-      .ilike("cpf_cnpj", like)
-      .limit(50);
-
-    if (error) throw error;
-
-    const hit = (data || []).find((p: any) => onlyDigits(p?.cpf_cnpj) === digits);
-    return hit ?? null;
-  }
+  if (error) throw error;
+  return data ?? null;
 }
 
 /* =========================
@@ -283,7 +263,7 @@ router.post("/change-password", requireAuth, async (req: Request, res: Response)
   }
 });
 
-// ✅ para outras rotas
+// ✅ para outras rotas (me.ts etc.)
 export { requireAuth };
 
 export default router;
