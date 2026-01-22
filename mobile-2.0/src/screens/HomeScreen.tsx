@@ -109,11 +109,6 @@ function formatCurrency(value: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function safeNumber(n: any) {
-  const v = Number(n);
-  return Number.isFinite(v) ? v : 0;
-}
-
 function formatDateBR(dateLike: any): string {
   if (!dateLike) return "";
   const d = new Date(dateLike);
@@ -155,152 +150,6 @@ function getSummaryFromOperations(
     totalRealizedProfit: realizedFinished,
     averageRoi,
   };
-}
-
-/**
- * =====================
- * Chart data
- * =====================
- */
-type ChartPoint = { x: number; y: number; kind: "realized" | "expected" };
-
-function buildRoiChartData(
-  operations: Operation[],
-  financialById: Record<string, OperationFinancial | undefined>
-) {
-  const finished = operations.filter((o) => o.status === "concluida");
-  const active = operations.filter((o) => o.status === "em_andamento");
-
-  const realized: ChartPoint[] = finished
-    .map((o, idx) => {
-      const id = String(o.id);
-      const fin = financialById[id];
-      const y = safeNumber(fin?.realizedRoiPercent ?? 0);
-      return { x: idx + 1, y, kind: "realized" as const };
-    })
-    .filter((p) => Number.isFinite(p.y));
-
-  const expectedBase: ChartPoint[] = active
-    .map((o, idx) => {
-      const y = safeNumber(roiToPercent(o.roi));
-      const x = realized.length + idx + 1;
-      return { x, y, kind: "expected" as const };
-    })
-    .filter((p) => Number.isFinite(p.y));
-
-  const expected: ChartPoint[] =
-    realized.length > 0 && expectedBase.length > 0
-      ? [
-          {
-            x: realized[realized.length - 1].x,
-            y: realized[realized.length - 1].y,
-            kind: "expected" as const,
-          },
-          ...expectedBase,
-        ]
-      : expectedBase;
-
-  const all = [...realized, ...expected];
-  const maxY = all.length ? Math.max(...all.map((p) => p.y)) : 0;
-
-  const yMax = Math.max(10, Math.ceil((maxY * 1.2) / 5) * 5);
-  const yMin = 0;
-
-  return { realized, expected, yMin, yMax };
-}
-
-function mapToXY(
-  points: ChartPoint[],
-  w: number,
-  h: number,
-  yMin: number,
-  yMax: number
-): { x: number; y: number; raw: ChartPoint }[] {
-  if (!points || points.length === 0) return [];
-
-  const xs = points.map((p) => p.x);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-
-  const singlePoint = maxX === minX;
-
-  const xSpan = Math.max(1, maxX - minX);
-  const ySpan = Math.max(1e-6, yMax - yMin);
-
-  return points.map((p) => {
-    const x = singlePoint ? w / 2 : ((p.x - minX) / xSpan) * w;
-    const y = h - ((p.y - yMin) / ySpan) * h;
-    return { x, y, raw: p };
-  });
-}
-
-function segmentsFromMapped(mapped: { x: number; y: number }[]) {
-  const segs: { x1: number; y1: number; x2: number; y2: number }[] = [];
-  for (let i = 0; i < mapped.length - 1; i++) {
-    segs.push({ x1: mapped[i].x, y1: mapped[i].y, x2: mapped[i + 1].x, y2: mapped[i + 1].y });
-  }
-  return segs;
-}
-
-function SegmentLine({
-  x1,
-  y1,
-  x2,
-  y2,
-  color,
-  dashed,
-}: {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  color: string;
-  dashed?: boolean;
-}) {
-  const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
-  const length = Math.max(1, Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2));
-
-  return (
-    <View
-      style={[
-        styles.segBase,
-        dashed ? styles.segDashed : styles.segSolid,
-        {
-          left: x1,
-          top: y1,
-          width: length,
-          backgroundColor: color,
-          transform: [{ rotateZ: `${angle}deg` }],
-        },
-      ]}
-    />
-  );
-}
-
-function Dot({
-  x,
-  y,
-  borderColor,
-  fillColor,
-}: {
-  x: number;
-  y: number;
-  borderColor: string;
-  fillColor: string;
-}) {
-  return (
-    <View
-      style={[
-        styles.dot,
-        {
-          left: x - 6,
-          top: y - 6,
-          borderColor,
-          backgroundColor: fillColor,
-        },
-      ]}
-    />
-  );
 }
 
 function MetricCard({ label, value }: { label: string; value: string }) {
@@ -437,9 +286,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
   );
   const [loadingFinancial, setLoadingFinancial] = useState(false);
 
-  const [chartW, setChartW] = useState(0);
-  const CHART_H = 160;
-
   const pushRegisteredRef = useRef(false);
 
   const ADVISOR = {
@@ -493,7 +339,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     }
   }, []);
 
-  // ✅ Atualiza badge e lista quando a Home ganha foco (voltar de notificações, abrir app, etc.)
+  // ✅ Atualiza badge e lista quando a Home ganha foco
   useFocusEffect(
     useCallback(() => {
       fetchUnreadCount();
@@ -673,21 +519,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
   const latestNotifs = (notifications ?? []).slice(0, 2);
   const greetingName = firstName ? capitalizeFirstName(firstName) : "investidor";
 
-  const chart = useMemo(() => buildRoiChartData(operations, financialById), [operations, financialById]);
-
-  const realizedMapped = useMemo(() => {
-    if (!chartW) return [];
-    return mapToXY(chart.realized, chartW, CHART_H, chart.yMin, chart.yMax);
-  }, [chart, chartW]);
-
-  const expectedMapped = useMemo(() => {
-    if (!chartW) return [];
-    return mapToXY(chart.expected, chartW, CHART_H, chart.yMin, chart.yMax);
-  }, [chart, chartW]);
-
-  const realizedSegs = useMemo(() => segmentsFromMapped(realizedMapped), [realizedMapped]);
-  const expectedSegs = useMemo(() => segmentsFromMapped(expectedMapped), [expectedMapped]);
-
   async function openEmail() {
     const url = `mailto:${ADVISOR.email}`;
     const can = await Linking.canOpenURL(url);
@@ -701,7 +532,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     if (can) Linking.openURL(url);
   }
 
-  // ✅ LOADING — agora também alimenta o badge do header
+  // ✅ LOADING
   if (!isHomeReady) {
     return (
       <Screen
@@ -718,7 +549,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     );
   }
 
-  // ✅ NORMAL — badge do header vem do unreadCount
   return (
     <Screen
       title=""
@@ -740,15 +570,12 @@ export function HomeScreen({ navigation, onLogout }: Props) {
         </View>
       </View>
 
-      {/* Extrato / Oportunidades */}
+      {/* Extrato / Oportunidades (ambos Em breve) */}
       <View style={styles.halfRow}>
-        <TouchableOpacity
-          style={styles.halfCard}
-          activeOpacity={0.85}
-          onPress={() => navigation.navigate("Statement" as never)}
-        >
+        <View style={[styles.halfCard, styles.halfCardDisabled]}>
           <Text style={styles.halfTitleCenter}>Extrato</Text>
-        </TouchableOpacity>
+          <Text style={styles.halfSubtitle}>Em breve</Text>
+        </View>
 
         <View style={[styles.halfCard, styles.halfCardDisabled]}>
           <Text style={styles.halfTitleCenter}>Oportunidades</Text>
@@ -776,88 +603,6 @@ export function HomeScreen({ navigation, onLogout }: Props) {
 
           <Text style={styles.operationsLinkText}>Ver detalhes das operações →</Text>
         </TouchableOpacity>
-      </View>
-
-      {/* Gráfico ROI */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Evolução do ROI (%)</Text>
-
-        <View style={styles.chartCard}>
-          <View style={styles.chartHeaderRow}>
-            <Text style={styles.chartMeta}>0%</Text>
-            <Text style={styles.chartMeta}>{chart.yMax.toFixed(0)}%</Text>
-          </View>
-
-          <View
-            style={styles.chartAreaWrap}
-            onLayout={(e) => {
-              const w = Math.floor(e.nativeEvent.layout.width);
-              if (w && w !== chartW) setChartW(w);
-            }}
-          >
-            <View style={[styles.chartArea, { height: CHART_H }]}>
-              <View style={[styles.gridLine, { top: CHART_H * 0.25 }]} />
-              <View style={[styles.gridLine, { top: CHART_H * 0.5 }]} />
-              <View style={[styles.gridLine, { top: CHART_H * 0.75 }]} />
-
-              {realizedSegs.map((s, idx) => (
-                <SegmentLine
-                  key={`r-${idx}`}
-                  x1={s.x1}
-                  y1={s.y1}
-                  x2={s.x2}
-                  y2={s.y2}
-                  color={TRI.green}
-                />
-              ))}
-              {realizedMapped.map((p, idx) => (
-                <Dot
-                  key={`rd-${idx}`}
-                  x={p.x}
-                  y={p.y}
-                  borderColor={TRI.green}
-                  fillColor={TRI.green}
-                />
-              ))}
-
-              {expectedSegs.map((s, idx) => (
-                <SegmentLine
-                  key={`e-${idx}`}
-                  x1={s.x1}
-                  y1={s.y1}
-                  x2={s.x2}
-                  y2={s.y2}
-                  color={TRI.blue}
-                  dashed
-                />
-              ))}
-              {expectedMapped.map((p, idx) => (
-                <Dot
-                  key={`ed-${idx}`}
-                  x={p.x}
-                  y={p.y}
-                  borderColor={TRI.blue}
-                  fillColor={TRI.blue}
-                />
-              ))}
-            </View>
-          </View>
-
-          <View style={styles.legendRow}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendSwatch, { backgroundColor: TRI.green }]} />
-              <Text style={styles.legendText}>Realizado (concluídas)</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendSwatch, { backgroundColor: TRI.blue }]} />
-              <Text style={styles.legendText}>Esperado (em andamento)</Text>
-            </View>
-          </View>
-
-          {chart.realized.length === 0 && chart.expected.length === 0 && (
-            <Text style={styles.chartEmpty}>Sem dados suficientes para gerar o gráfico.</Text>
-          )}
-        </View>
       </View>
 
       {/* Lucro / ROI médio */}
@@ -1014,66 +759,6 @@ const styles = StyleSheet.create({
   operationsTitle: { color: TRI.text, fontSize: 16, fontWeight: "600", marginBottom: 4 },
   operationsSubtitle: { color: "#C5D2E0", fontSize: 13, marginBottom: 10 },
   operationsLinkText: { color: TRI.link, fontSize: 13, fontWeight: "500" },
-
-  chartCard: {
-    backgroundColor: TRI.card,
-    borderRadius: 12,
-    padding: 14,
-    alignItems: "center",
-  },
-  chartHeaderRow: {
-    width: "100%",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  chartMeta: { color: TRI.muted, fontSize: 12, fontWeight: "900" },
-  chartAreaWrap: { width: "100%" },
-  chartArea: {
-    width: "100%",
-    backgroundColor: TRI.card2,
-    borderRadius: 12,
-    overflow: "hidden",
-    position: "relative",
-  },
-  gridLine: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: TRI.line,
-    opacity: 0.35,
-  },
-  segBase: {
-    position: "absolute",
-    height: 3,
-    borderRadius: 3,
-    transformOrigin: "0% 50%",
-  },
-  segSolid: { opacity: 1 },
-  segDashed: {
-    opacity: 0.95,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.25)",
-  },
-  dot: {
-    position: "absolute",
-    width: 12,
-    height: 12,
-    borderRadius: 999,
-    borderWidth: 3,
-  },
-  legendRow: {
-    width: "100%",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 12,
-    gap: 10,
-  },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1 },
-  legendSwatch: { width: 10, height: 10, borderRadius: 999 },
-  legendText: { color: TRI.muted, fontSize: 12, fontWeight: "800" },
-  chartEmpty: { marginTop: 10, color: TRI.muted, fontSize: 12, fontWeight: "700" },
 
   notifHeaderRow: {
     flexDirection: "row",
