@@ -158,7 +158,7 @@ function inferSignedAmount(row: any): number {
   const tp = String(row?.tp_lancamento ?? "").toLowerCase().trim();
   const st = String(row?.status ?? "").toLowerCase().trim();
 
-  // Heurística: se parece saída/débito => negativo
+  // saída/débito
   const looksOut =
     nat === "d" ||
     nat.includes("deb") ||
@@ -170,7 +170,7 @@ function inferSignedAmount(row: any): number {
     tp.includes("pag") ||
     st.includes("pagar");
 
-  // Se parece entrada/crédito => positivo
+  // entrada/crédito
   const looksIn =
     nat === "c" ||
     nat.includes("cred") ||
@@ -182,7 +182,7 @@ function inferSignedAmount(row: any): number {
     tp.includes("rec");
 
   if (looksOut && !looksIn) return -v;
-  return v; // default: entrada
+  return v;
 }
 
 router.get("/financial/statement", requireAuth, async (req: Request, res: Response) => {
@@ -221,7 +221,7 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
       });
     }
 
-    // ✅ garante compatibilidade cod_cliente número vs string
+    // ✅ compat cod_cliente (numérico vs string)
     const omieCodesNum = omieCodes
       .map((x) => Number(String(x).trim()))
       .filter((n) => Number.isFinite(n));
@@ -230,7 +230,7 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
     const startIso0 = isoStartOfDay(startYmd);
     const endIso1 = isoEndOfDay(endYmd);
 
-    // ✅ OR correto com AND por campo (intervalo real)
+    // ✅ OR correto com AND por campo
     const orRange = [
       `and(dt_pagamento.gte.${startIso0},dt_pagamento.lte.${endIso1})`,
       `and(dt_emissao.gte.${startIso0},dt_emissao.lte.${endIso1})`,
@@ -251,7 +251,6 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
 
     const rows = Array.isArray(data) ? data : [];
 
-    // 🔎 logs úteis (aparecem no Render)
     console.log("🧾 [statement] cpfFromToken =", rawCpfFromToken);
     console.log(
       "🧾 [statement] omieCodesCount =",
@@ -275,7 +274,6 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
       });
     }
 
-    // Refinamento final (data escolhida: pagamento > emissão > venc)
     const items: StatementItem[] = rows
       .map((row: any) => {
         const iso = pickMovementDateISO(row);
@@ -287,7 +285,8 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
           date: ymd,
           description: String(row?.descricao ?? "Movimentação").trim(),
           amount: amountSigned,
-          type: amountSigned >= 0 ? "entrada" : "saida",
+          // ✅ FIX TS: mantém literal "entrada" | "saida"
+          type: (amountSigned >= 0 ? "entrada" : "saida") as "entrada" | "saida",
         };
       })
       .filter((it) => it.date && it.date >= startYmd && it.date <= endYmd)
@@ -325,6 +324,9 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
    ✅ FINANCEIRO POR OPERAÇÃO - GET /operation-financial/:operationId
 ========================= */
 
+/**
+ * GET /operation-financial/:operationId
+ */
 router.get("/operation-financial/:operationId", requireAuth, async (req: Request, res: Response) => {
   try {
     const operationId = String(req.params.operationId || "").trim();
@@ -385,7 +387,6 @@ router.get("/operation-financial/:operationId", requireAuth, async (req: Request
 
     const projectInternalCode = String(best.omie_internal_code ?? "").trim();
 
-    // ✅ regras que você passou
     const invested = await sumMovements({ projectInternalCode, categoryCode: "1.04.02", omieCodes });
     const realized = await sumMovements({ projectInternalCode, categoryCode: "2.10.98", omieCodes });
 
