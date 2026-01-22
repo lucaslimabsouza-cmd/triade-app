@@ -6,9 +6,8 @@ import { supabaseAdmin } from "../lib/supabase";
 const router = Router();
 
 /* =========================
-   Helpers
+   Utils
 ========================= */
-
 function onlyDigits(s = "") {
   return String(s).replace(/\D/g, "");
 }
@@ -56,8 +55,6 @@ function parseISODateOnly(s?: string | null) {
   const raw = String(s ?? "").trim();
   if (!raw) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
-
-  // date-only (sem timezone do usuário)
   const d = new Date(`${raw}T00:00:00.000Z`);
   if (isNaN(d.getTime())) return null;
   return d;
@@ -69,7 +66,6 @@ function coerceNumber(v: any) {
 }
 
 function isoStartOfDay(ymd: string) {
-  // ymd = YYYY-MM-DD
   return `${ymd}T00:00:00.000Z`;
 }
 function isoEndOfDay(ymd: string) {
@@ -106,12 +102,18 @@ async function sumMovements(params: {
 
   if (!omieCodes || omieCodes.length === 0) return { total: 0, rows: 0 };
 
+  const omieCodesNum = omieCodes
+    .map((x) => Number(String(x).trim()))
+    .filter((n) => Number.isFinite(n));
+
+  const codesForIn: any[] = omieCodesNum.length ? omieCodesNum : omieCodes;
+
   const { data, error } = await supabaseAdmin
     .from("omie_mf_movements")
     .select("valor")
     .eq("cod_projeto", projectInternalCode)
     .eq("cod_categoria", categoryCode)
-    .in("cod_cliente", omieCodes);
+    .in("cod_cliente", codesForIn);
 
   if (error) throw new Error(`Supabase omie_mf_movements error: ${error.message}`);
 
@@ -120,8 +122,7 @@ async function sumMovements(params: {
 }
 
 /* =========================
-   ✅ EXTRATO
-   GET /financial/statement
+   ✅ EXTRATO - GET /financial/statement
 ========================= */
 
 type StatementItem = {
@@ -155,18 +156,30 @@ function inferSignedAmount(row: any): number {
 
   const nat = String(row?.natureza ?? "").toLowerCase().trim();
   const tp = String(row?.tp_lancamento ?? "").toLowerCase().trim();
+  const st = String(row?.status ?? "").toLowerCase().trim();
 
-  // Heurística segura:
-  // - se natureza/tipo indica saída/débito => negativo
-  // - se indica entrada/crédito => positivo
-  // (se não der pra inferir, assume positivo)
+  // Heurística: se parece saída/débito => negativo
   const looksOut =
-    nat.includes("d") || nat.includes("deb") || nat.includes("saida") || nat.includes("desp") ||
-    tp.includes("d") || tp.includes("deb") || tp.includes("saida") || tp.includes("pag");
+    nat === "d" ||
+    nat.includes("deb") ||
+    nat.includes("saida") ||
+    nat.includes("desp") ||
+    tp === "d" ||
+    tp.includes("deb") ||
+    tp.includes("saida") ||
+    tp.includes("pag") ||
+    st.includes("pagar");
 
+  // Se parece entrada/crédito => positivo
   const looksIn =
-    nat.includes("c") || nat.includes("cred") || nat.includes("entrada") || nat.includes("rece") ||
-    tp.includes("c") || tp.includes("cred") || tp.includes("entrada") || tp.includes("rec");
+    nat === "c" ||
+    nat.includes("cred") ||
+    nat.includes("entrada") ||
+    nat.includes("rece") ||
+    tp === "c" ||
+    tp.includes("cred") ||
+    tp.includes("entrada") ||
+    tp.includes("rec");
 
   if (looksOut && !looksIn) return -v;
   return v; // default: entrada
@@ -208,33 +221,61 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
       });
     }
 
+    // ✅ garante compatibilidade cod_cliente número vs string
+    const omieCodesNum = omieCodes
+      .map((x) => Number(String(x).trim()))
+      .filter((n) => Number.isFinite(n));
+    const codesForIn: any[] = omieCodesNum.length ? omieCodesNum : omieCodes;
+
     const startIso0 = isoStartOfDay(startYmd);
     const endIso1 = isoEndOfDay(endYmd);
 
-    // Busca movimentos no período
-    // ⚠️ Como a “data do movimento” pode cair em dt_pagamento OU dt_emissao (etc),
-    // fazemos OR e depois refinamos no Node usando pickMovementDateISO.
+    // ✅ OR correto com AND por campo (intervalo real)
+    const orRange = [
+      `and(dt_pagamento.gte.${startIso0},dt_pagamento.lte.${endIso1})`,
+      `and(dt_emissao.gte.${startIso0},dt_emissao.lte.${endIso1})`,
+      `and(dt_venc.gte.${startIso0},dt_venc.lte.${endIso1})`,
+    ].join(",");
+
     const { data, error } = await supabaseAdmin
       .from("omie_mf_movements")
-      .select("cod_mov_cc, dt_pagamento, dt_emissao, dt_venc, valor, descricao, natureza, tp_lancamento, cod_cliente, cod_categoria, cod_projeto")
-      .in("cod_cliente", omieCodes)
-      .or(
-        [
-          `dt_pagamento.gte.${startIso0}`,
-          `dt_pagamento.lte.${endIso1}`,
-          `dt_emissao.gte.${startIso0}`,
-          `dt_emissao.lte.${endIso1}`,
-          `dt_venc.gte.${startIso0}`,
-          `dt_venc.lte.${endIso1}`,
-        ].join(",")
+      .select(
+        "cod_mov_cc, dt_pagamento, dt_emissao, dt_venc, valor, descricao, natureza, tp_lancamento, status, cod_cliente, cod_categoria, cod_projeto, updated_at"
       )
+      .in("cod_cliente", codesForIn)
+      .or(orRange)
+      .order("updated_at", { ascending: false })
       .limit(5000);
 
     if (error) throw new Error(`Supabase omie_mf_movements error: ${error.message}`);
 
     const rows = Array.isArray(data) ? data : [];
 
-    // refinamento final por data escolhida (pagamento > emissão > venc)
+    // 🔎 logs úteis (aparecem no Render)
+    console.log("🧾 [statement] cpfFromToken =", rawCpfFromToken);
+    console.log(
+      "🧾 [statement] omieCodesCount =",
+      omieCodes.length,
+      "omieCodesNumCount =",
+      omieCodesNum.length
+    );
+    console.log("🧾 [statement] range =", startIso0, "->", endIso1);
+    console.log("🧾 [statement] fetchedRows =", rows.length);
+    if (rows[0]) {
+      console.log("🧾 [statement] sampleRow =", {
+        cod_mov_cc: rows[0].cod_mov_cc,
+        dt_pagamento: rows[0].dt_pagamento,
+        dt_emissao: rows[0].dt_emissao,
+        dt_venc: rows[0].dt_venc,
+        valor: rows[0].valor,
+        natureza: rows[0].natureza,
+        tp_lancamento: rows[0].tp_lancamento,
+        status: rows[0].status,
+        cod_cliente: rows[0].cod_cliente,
+      });
+    }
+
+    // Refinamento final (data escolhida: pagamento > emissão > venc)
     const items: StatementItem[] = rows
       .map((row: any) => {
         const iso = pickMovementDateISO(row);
@@ -250,7 +291,6 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
         };
       })
       .filter((it) => it.date && it.date >= startYmd && it.date <= endYmd)
-      // mais recente primeiro
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
     let totalIn = 0;
@@ -282,8 +322,7 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
 });
 
 /* =========================
-   ✅ FINANCEIRO POR OPERAÇÃO
-   GET /operation-financial/:operationId
+   ✅ FINANCEIRO POR OPERAÇÃO - GET /operation-financial/:operationId
 ========================= */
 
 router.get("/operation-financial/:operationId", requireAuth, async (req: Request, res: Response) => {
@@ -356,7 +395,6 @@ router.get("/operation-financial/:operationId", requireAuth, async (req: Request
     const expectedProfit =
       amountInvested && roiExpectedPercent ? amountInvested * (roiExpectedPercent / 100) : 0;
 
-    // ✅ “realizedProfit/realizedReturn = 2.10.98 dividido por 1.04.02”
     const realizedRoiPercent = amountInvested > 0 ? (realizedValue / amountInvested) * 100 : 0;
 
     return res.json({
