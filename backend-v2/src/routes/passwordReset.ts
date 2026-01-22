@@ -30,8 +30,22 @@ function sanitizeEmailFrom(v: any) {
 
 function isValidFromFormat(from: string) {
   const plain = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
-  const named = /^.+\s<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>$/;
+  const named = /^.+\s<[^<>\s@]+@[^<>\s@<>]+\.[^\s@<>]+>$/;
   return plain.test(from) || named.test(from);
+}
+
+/** formata CPF 12398921603 -> 123.989.216-03 */
+function maskCpf(digits11: string) {
+  const d = onlyDigits(digits11);
+  if (d.length !== 11) return "";
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9, 11)}`;
+}
+
+/** formata CNPJ 12345678000190 -> 12.345.678/0001-90 */
+function maskCnpj(digits14: string) {
+  const d = onlyDigits(digits14);
+  if (d.length !== 14) return "";
+  return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12, 14)}`;
 }
 
 function getDeepLink(token: string) {
@@ -47,24 +61,40 @@ function getPublicRedirectLink(token: string) {
 }
 
 /**
- * ✅ Helper: encontra party por CPF/CNPJ com ou sem máscara
- * - aceita raw "123.989.216-03" ou "12398921603"
- * - tenta eq raw, eq digits e fallback ilike com digits
+ * ✅ Helper: encontra omie_parties por CPF/CNPJ com OU sem pontuação
+ * IMPORTANTE: ilike com digits NÃO funciona quando o banco guarda mascarado.
+ * Então fazemos match por candidatos: raw, digits, masked gerado.
  */
-async function findPartyByCpfOrCnpj(rawCpfCnpj: string) {
-  const raw = String(rawCpfCnpj ?? "").trim();
+async function findPartyByCpf(rawCpf: string) {
+  const raw = String(rawCpf ?? "").trim();
   const digits = onlyDigits(raw);
 
   if (![11, 14].includes(digits.length)) return null;
 
-  const { data, error } = await supabaseAdmin
+  const candidates = new Set<string>();
+  if (raw) candidates.add(raw);
+  if (digits) candidates.add(digits);
+
+  if (digits.length === 11) candidates.add(maskCpf(digits));
+  if (digits.length === 14) candidates.add(maskCnpj(digits));
+
+  const list = Array.from(candidates).filter(Boolean);
+
+  const { data: parties, error } = await supabaseAdmin
     .from("omie_parties")
     .select("id,email,cpf_cnpj,name,omie_code")
-    .or(`cpf_cnpj.eq.${raw},cpf_cnpj.eq.${digits},cpf_cnpj.ilike.%${digits}%`)
-    .maybeSingle();
+    .in("cpf_cnpj", list)
+    .limit(5);
 
   if (error) throw error;
-  return data ?? null;
+
+  // se vier mais de 1 (raríssimo), preferir o que tem email
+  const best =
+    (parties ?? []).find((p: any) => String(p?.email ?? "").trim()) ??
+    (parties ?? [])[0] ??
+    null;
+
+  return best;
 }
 
 /* =========================
@@ -85,9 +115,11 @@ function getMailerSMTP() {
     port,
     secure,
     auth: { user, pass },
+
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 10000,
+
     requireTLS: !secure,
     tls: { rejectUnauthorized: false },
   });
@@ -135,7 +167,7 @@ async function sendEmail(params: { to: string; subject: string; text: string; ht
     }
   }
 
-  // 🔁 Fallback: SMTP (local/dev)
+  // 🔁 Fallback: SMTP
   const transporter = getMailerSMTP();
 
   const fromSMTP =
@@ -213,14 +245,16 @@ router.post("/auth/forgot-password", async (req, res) => {
 
   try {
     const rawCpf = String(req.body?.cpf ?? "").trim();
-    const cpfDigits = onlyDigits(rawCpf);
+    const digits = onlyDigits(rawCpf);
+    if (!digits) return res.status(400).json({ ok: false, error: "CPF obrigatório" });
 
-    if (!cpfDigits) return res.status(400).json({ ok: false, error: "CPF obrigatório" });
-    if (cpfDigits.length !== 11) return res.status(400).json({ ok: false, error: "CPF inválido" });
+    const party = await findPartyByCpf(rawCpf);
 
-    // ✅ CORREÇÃO: busca flexível (com/sem máscara)
-    const party = await findPartyByCpfOrCnpj(rawCpf);
-    if (!party?.id || !party?.email) return res.json(neutral);
+    // não vaza info se não achou / não tem email
+    if (!party?.id || !String(party?.email ?? "").trim()) {
+      console.log("[forgot-password] party not found or missing email. rawCpf=", rawCpf);
+      return res.json(neutral);
+    }
 
     const ttlMin = Number(stripQuotes(process.env.RESET_TOKEN_TTL_MINUTES || "30"));
     const token = crypto.randomBytes(32).toString("hex");
@@ -248,13 +282,16 @@ router.post("/auth/forgot-password", async (req, res) => {
         .select("id")
         .maybeSingle();
 
-      if (upsertErr || !upsertData?.id) return res.json(neutral);
+      if (upsertErr || !upsertData?.id) {
+        console.log("[forgot-password] failed to upsert party_auth:", upsertErr?.message);
+        return res.json(neutral);
+      }
     }
 
     const deepLink = getDeepLink(token);
     const redirectLink = getPublicRedirectLink(token);
 
-    console.log("RESET deepLink =", deepLink);
+    console.log("RESET cpf(raw) =", rawCpf, "digits =", digits, "party.cpf_cnpj =", party.cpf_cnpj);
     console.log("RESET redirectLink =", redirectLink);
 
     const subject = "Redefinição de senha - Triade";
@@ -290,7 +327,7 @@ router.post("/auth/forgot-password", async (req, res) => {
     `;
 
     const sent = await sendEmail({
-      to: party.email,
+      to: String(party.email).trim(),
       subject,
       text,
       html,
@@ -329,7 +366,7 @@ router.post("/auth/reset-password", async (req, res) => {
     if (findErr || !authRow?.id) return res.status(400).json({ ok: false, error: "Token inválido" });
 
     const expMs = authRow.reset_token_expires_at
-      ? new Date(authRow.reset_token_expires_at).getTime()
+      ? new Date(authRow.reset_token_expires_at as any).getTime()
       : 0;
 
     if (!expMs || expMs < Date.now()) return res.status(400).json({ ok: false, error: "Token expirado" });
