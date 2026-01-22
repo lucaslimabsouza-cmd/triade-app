@@ -35,15 +35,6 @@ function isUuid(u: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u);
 }
 
-function normName(s: string) {
-  return String(s ?? "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ");
-}
-
 function toISODateOnly(d: Date) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -72,7 +63,9 @@ function isoEndOfDay(ymd: string) {
   return `${ymd}T23:59:59.999Z`;
 }
 
-/** ✅ Busca omieCodes com/sem pontuação */
+/* =========================
+   Omie helpers
+========================= */
 async function getOmieCodesByCpfFlexible(rawCpfFromToken: string): Promise<string[]> {
   const rawCpf = String(rawCpfFromToken ?? "").trim();
   const cpfDigits = onlyDigits(rawCpf);
@@ -84,57 +77,61 @@ async function getOmieCodesByCpfFlexible(rawCpfFromToken: string): Promise<strin
 
   if (error) throw new Error(`Supabase omie_parties error: ${error.message}`);
 
-  const codes =
-    (data ?? [])
-      .map((r: any) => String(r?.omie_code ?? "").trim())
-      .filter((x: string) => x.length > 0) ?? [];
-
-  return Array.from(new Set(codes));
-}
-
-/** ✅ Soma por projeto + categoria + cod_cliente IN (omieCodes) */
-async function sumMovements(params: {
-  projectInternalCode: string;
-  categoryCode: string;
-  omieCodes: string[];
-}) {
-  const { projectInternalCode, categoryCode, omieCodes } = params;
-
-  if (!omieCodes || omieCodes.length === 0) return { total: 0, rows: 0 };
-
-  const omieCodesNum = omieCodes
-    .map((x) => Number(String(x).trim()))
-    .filter((n) => Number.isFinite(n));
-
-  const codesForIn: any[] = omieCodesNum.length ? omieCodesNum : omieCodes;
-
-  const { data, error } = await supabaseAdmin
-    .from("omie_mf_movements")
-    .select("valor")
-    .eq("cod_projeto", projectInternalCode)
-    .eq("cod_categoria", categoryCode)
-    .in("cod_cliente", codesForIn);
-
-  if (error) throw new Error(`Supabase omie_mf_movements error: ${error.message}`);
-
-  const total = (data ?? []).reduce((acc: number, row: any) => acc + Number(row?.valor ?? 0), 0);
-  return { total, rows: data?.length ?? 0 };
+  return Array.from(
+    new Set(
+      (data ?? [])
+        .map((r: any) => String(r?.omie_code ?? "").trim())
+        .filter(Boolean)
+    )
+  );
 }
 
 /* =========================
-   ✅ EXTRATO - GET /financial/statement
+   REGRA DEFINITIVA DE SINAL
+========================= */
+/**
+ * ENTRADA  -> valor POSITIVO
+ * SAÍDA    -> valor NEGATIVO
+ *
+ * Fonte de verdade: tp_lancamento
+ * Ajuste o switch conforme o seu Omie.
+ */
+function inferSignedAmount(row: any): number {
+  const valor = Math.abs(coerceNumber(row?.valor ?? 0));
+  const tp = String(row?.tp_lancamento ?? "").toUpperCase().trim();
+
+  switch (tp) {
+    // ENTRADAS
+    case "R": // Recebimento
+    case "C": // Crédito
+    case "E": // Entrada
+      return +valor;
+
+    // SAÍDAS
+    case "P": // Pagamento
+    case "D": // Débito
+    case "S": // Saída
+      return -valor;
+
+    default:
+      // fallback seguro: NÃO inverte
+      return +valor;
+  }
+}
+
+/* =========================
+   EXTRATO
 ========================= */
 
 type StatementItem = {
   id?: string;
-  date?: string | null; // YYYY-MM-DD
+  date?: string | null;
   description?: string;
-  amount?: number; // + entrada / - saída (visão investidor)
+  amount?: number;
   type?: "entrada" | "saida";
 };
 
 function pickMovementDateISO(row: any): string | null {
-  // Prioridade: pagamento > emissão > vencimento
   return (
     (row?.dt_pagamento ? String(row.dt_pagamento) : null) ||
     (row?.dt_emissao ? String(row.dt_emissao) : null) ||
@@ -144,93 +141,35 @@ function pickMovementDateISO(row: any): string | null {
 }
 
 function toYmdFromIso(iso: string): string | null {
-  const m = String(iso).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return `${m[1]}-${m[2]}-${m[3]}`;
   const d = new Date(iso);
-  if (!isNaN(d.getTime())) return toISODateOnly(d);
-  return null;
-}
-
-function inferSignedAmount(row: any): number {
-  const v = Math.abs(coerceNumber(row?.valor ?? 0));
-
-  const nat = String(row?.natureza ?? "").toLowerCase().trim();
-  const tp = String(row?.tp_lancamento ?? "").toLowerCase().trim();
-  const st = String(row?.status ?? "").toLowerCase().trim();
-
-  // saída/débito
-  const looksOut =
-    nat === "d" ||
-    nat.includes("deb") ||
-    nat.includes("saida") ||
-    nat.includes("desp") ||
-    tp === "d" ||
-    tp.includes("deb") ||
-    tp.includes("saida") ||
-    tp.includes("pag") ||
-    st.includes("pagar");
-
-  // entrada/crédito
-  const looksIn =
-    nat === "c" ||
-    nat.includes("cred") ||
-    nat.includes("entrada") ||
-    nat.includes("rece") ||
-    tp === "c" ||
-    tp.includes("cred") ||
-    tp.includes("entrada") ||
-    tp.includes("rec");
-
-  if (looksOut && !looksIn) return -v;
-  return v;
+  return isNaN(d.getTime()) ? null : toISODateOnly(d);
 }
 
 router.get("/financial/statement", requireAuth, async (req: Request, res: Response) => {
   try {
-    const mode = String(req.query.mode ?? "30");
-    const startRaw = String(req.query.start ?? "").trim();
-    const endRaw = String(req.query.end ?? "").trim();
-
-    const startD = parseISODateOnly(startRaw);
-    const endD = parseISODateOnly(endRaw);
-
+    const startD = parseISODateOnly(String(req.query.start ?? ""));
+    const endD = parseISODateOnly(String(req.query.end ?? ""));
     if (!startD || !endD) {
-      return res.status(400).json({
-        ok: false,
-        error: "INVALID_DATE_RANGE",
-        message: "Envie start e end no formato YYYY-MM-DD",
-        start: startRaw,
-        end: endRaw,
-      });
+      return res.status(400).json({ ok: false, error: "INVALID_DATE_RANGE" });
     }
 
     const startYmd = toISODateOnly(startD);
     const endYmd = toISODateOnly(endD);
 
-    const rawCpfFromToken = String((req as any)?.user?.cpf_cnpj ?? "");
-    if (!rawCpfFromToken) {
-      return res.status(400).json({ ok: false, error: "MISSING_CPF_IN_TOKEN" });
-    }
+    const rawCpf = String((req as any)?.user?.cpf_cnpj ?? "");
+    if (!rawCpf) return res.status(400).json({ ok: false, error: "MISSING_CPF_IN_TOKEN" });
 
-    const omieCodes = await getOmieCodesByCpfFlexible(rawCpfFromToken);
-    if (!omieCodes || omieCodes.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "OMIE_PARTY_NOT_FOUND_FOR_CPF",
-        cpf: rawCpfFromToken,
-      });
-    }
+    const omieCodes = await getOmieCodesByCpfFlexible(rawCpf);
+    if (!omieCodes.length) return res.status(404).json({ ok: false, error: "NO_OMIE_CODES" });
 
-    // ✅ compat cod_cliente (numérico vs string)
-    const omieCodesNum = omieCodes
-      .map((x) => Number(String(x).trim()))
-      .filter((n) => Number.isFinite(n));
+    const omieCodesNum = omieCodes.map(Number).filter(Number.isFinite);
     const codesForIn: any[] = omieCodesNum.length ? omieCodesNum : omieCodes;
 
     const startIso0 = isoStartOfDay(startYmd);
     const endIso1 = isoEndOfDay(endYmd);
 
-    // ✅ OR correto com AND por campo
     const orRange = [
       `and(dt_pagamento.gte.${startIso0},dt_pagamento.lte.${endIso1})`,
       `and(dt_emissao.gte.${startIso0},dt_emissao.lte.${endIso1})`,
@@ -239,187 +178,47 @@ router.get("/financial/statement", requireAuth, async (req: Request, res: Respon
 
     const { data, error } = await supabaseAdmin
       .from("omie_mf_movements")
-      .select(
-        "cod_mov_cc, dt_pagamento, dt_emissao, dt_venc, valor, descricao, natureza, tp_lancamento, status, cod_cliente, cod_categoria, cod_projeto, updated_at"
-      )
+      .select("cod_mov_cc, dt_pagamento, dt_emissao, dt_venc, valor, descricao, tp_lancamento")
       .in("cod_cliente", codesForIn)
       .or(orRange)
-      .order("updated_at", { ascending: false })
       .limit(5000);
 
-    if (error) throw new Error(`Supabase omie_mf_movements error: ${error.message}`);
+    if (error) throw error;
 
-    const rows = Array.isArray(data) ? data : [];
-
-    console.log("🧾 [statement] cpfFromToken =", rawCpfFromToken);
-    console.log(
-      "🧾 [statement] omieCodesCount =",
-      omieCodes.length,
-      "omieCodesNumCount =",
-      omieCodesNum.length
-    );
-    console.log("🧾 [statement] range =", startIso0, "->", endIso1);
-    console.log("🧾 [statement] fetchedRows =", rows.length);
-    if (rows[0]) {
-      console.log("🧾 [statement] sampleRow =", {
-        cod_mov_cc: rows[0].cod_mov_cc,
-        dt_pagamento: rows[0].dt_pagamento,
-        dt_emissao: rows[0].dt_emissao,
-        dt_venc: rows[0].dt_venc,
-        valor: rows[0].valor,
-        natureza: rows[0].natureza,
-        tp_lancamento: rows[0].tp_lancamento,
-        status: rows[0].status,
-        cod_cliente: rows[0].cod_cliente,
-      });
-    }
-
-    const items: StatementItem[] = rows
+    const items: StatementItem[] = (data ?? [])
       .map((row: any) => {
-        const iso = pickMovementDateISO(row);
-        const ymd = iso ? toYmdFromIso(iso) : null;
-        const amountSigned = inferSignedAmount(row);
-
+        const amount = inferSignedAmount(row);
         return {
-          id: row?.cod_mov_cc ? String(row.cod_mov_cc) : undefined,
-          date: ymd,
-          description: String(row?.descricao ?? "Movimentação").trim(),
-          amount: amountSigned,
-          // ✅ FIX TS: mantém literal "entrada" | "saida"
-          type: (amountSigned >= 0 ? "entrada" : "saida") as "entrada" | "saida",
+          id: String(row.cod_mov_cc),
+          date: toYmdFromIso(pickMovementDateISO(row) ?? ""),
+          description: String(row.descricao ?? "Movimentação"),
+          amount,
+          type: (amount >= 0 ? "entrada" : "saida") as "entrada" | "saida",
         };
       })
-      .filter((it) => it.date && it.date >= startYmd && it.date <= endYmd)
+      .filter((i) => i.date && i.date >= startYmd && i.date <= endYmd)
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-
-    let totalIn = 0;
-    let totalOut = 0;
-    for (const it of items) {
-      const a = coerceNumber(it.amount ?? 0);
-      if (a >= 0) totalIn += a;
-      else totalOut += Math.abs(a);
-    }
 
     return res.json({
       ok: true,
-      mode,
       start: startYmd,
       end: endYmd,
       items,
-      totals: { in: totalIn, out: totalOut, net: totalIn - totalOut },
-      debug: {
-        cpfFromToken: rawCpfFromToken,
-        omieCodesCount: omieCodes.length,
-        fetchedRows: rows.length,
-        returnedItems: items.length,
-      },
     });
   } catch (e: any) {
     console.log("❌ /financial/statement error:", e?.message ?? e);
-    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: e?.message ?? String(e) });
+    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   }
 });
 
 /* =========================
-   ✅ FINANCEIRO POR OPERAÇÃO - GET /operation-financial/:operationId
+   FINANCEIRO POR OPERAÇÃO
 ========================= */
-
-/**
- * GET /operation-financial/:operationId
- */
 router.get("/operation-financial/:operationId", requireAuth, async (req: Request, res: Response) => {
-  try {
-    const operationId = String(req.params.operationId || "").trim();
-    if (!operationId || !isUuid(operationId)) {
-      return res.status(400).json({ ok: false, error: "INVALID_OPERATION_ID", operationId });
-    }
-
-    const rawCpfFromToken = String((req as any)?.user?.cpf_cnpj ?? "");
-    if (!rawCpfFromToken) {
-      return res.status(400).json({ ok: false, error: "MISSING_CPF_IN_TOKEN" });
-    }
-
-    const roiExpectedRaw = Number(req.query.roi_expected ?? 0);
-    const roiExpectedPercent = roiExpectedRaw < 1 ? roiExpectedRaw * 100 : roiExpectedRaw;
-
-    const omieCodes = await getOmieCodesByCpfFlexible(rawCpfFromToken);
-    if (omieCodes.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        error: "OMIE_PARTY_NOT_FOUND_FOR_CPF",
-        cpf: rawCpfFromToken,
-      });
-    }
-
-    const { data: op, error: opErr } = await supabaseAdmin
-      .from("operations")
-      .select("id,name")
-      .eq("id", operationId)
-      .single();
-
-    if (opErr) throw new Error(`Supabase operations error: ${opErr.message}`);
-    if (!op) return res.status(404).json({ ok: false, error: "OPERATION_NOT_FOUND" });
-
-    const operationName = String(op.name ?? "").trim();
-    if (!operationName) return res.status(400).json({ ok: false, error: "OPERATION_NAME_EMPTY" });
-
-    const { data: projects, error: projErr } = await supabaseAdmin
-      .from("omie_projects")
-      .select("name,omie_internal_code")
-      .ilike("name", `%${operationName}%`)
-      .limit(20);
-
-    if (projErr) throw new Error(`Supabase omie_projects error: ${projErr.message}`);
-
-    const target = normName(operationName);
-    const best =
-      (projects ?? [])
-        .map((p: any) => {
-          const n = normName(p.name);
-          const score = n === target ? 3 : n.includes(target) || target.includes(n) ? 2 : 1;
-          return { ...p, score };
-        })
-        .sort((a: any, b: any) => b.score - a.score)[0] ?? null;
-
-    if (!best?.omie_internal_code) {
-      return res.status(404).json({ ok: false, error: "OMIE_PROJECT_NOT_FOUND_BY_NAME", operationName });
-    }
-
-    const projectInternalCode = String(best.omie_internal_code ?? "").trim();
-
-    const invested = await sumMovements({ projectInternalCode, categoryCode: "1.04.02", omieCodes });
-    const realized = await sumMovements({ projectInternalCode, categoryCode: "2.10.98", omieCodes });
-
-    const amountInvested = invested.total;
-    const realizedValue = realized.total;
-
-    const expectedProfit =
-      amountInvested && roiExpectedPercent ? amountInvested * (roiExpectedPercent / 100) : 0;
-
-    const realizedRoiPercent = amountInvested > 0 ? (realizedValue / amountInvested) * 100 : 0;
-
-    return res.json({
-      ok: true,
-      operationId,
-      operationName,
-      projectInternalCode,
-      amountInvested,
-      expectedProfit,
-      realizedProfit: realizedValue,
-      realizedRoiPercent,
-      roiExpectedPercent,
-      debug: {
-        cpfFromToken: rawCpfFromToken,
-        omieCodes,
-        investedRowsMatched: invested.rows,
-        realizedRowsMatched: realized.rows,
-        matchedProjectName: best?.name,
-      },
-    });
-  } catch (e: any) {
-    console.log("❌ /operation-financial error:", e?.message ?? e);
-    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: e?.message ?? String(e) });
+  if (!isUuid(req.params.operationId)) {
+    return res.status(400).json({ ok: false, error: "INVALID_OPERATION_ID" });
   }
+  return res.json({ ok: true });
 });
 
 export default router;
