@@ -13,13 +13,12 @@ const router = (0, express_1.Router)();
 /* =========================
    Utils
 ========================= */
-const onlyDigits = (v) => (v || "").replace(/\D/g, "");
+const onlyDigits = (v) => String(v || "").replace(/\D/g, "");
 const sha256Hex = (v) => crypto_1.default.createHash("sha256").update(v).digest("hex");
 function stripQuotes(v) {
     return String(v ?? "").replace(/^"+|"+$/g, "").trim();
 }
 function sanitizeEmailFrom(v) {
-    // remove aspas, quebras de linha e espaços duplicados
     const raw = String(v ?? "");
     const cleaned = raw
         .replace(/^"+|"+$/g, "")
@@ -29,20 +28,36 @@ function sanitizeEmailFrom(v) {
     return { raw, cleaned };
 }
 function isValidFromFormat(from) {
-    // email@dominio.com
     const plain = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
-    // Nome <email@dominio.com>
     const named = /^.+\s<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>$/;
     return plain.test(from) || named.test(from);
 }
+/**
+ * ✅ Helper único: busca party por CPF/CNPJ independente de máscara
+ * - aceita: "12398921603" ou "123.989.216-03"
+ */
+async function findPartyByCpfOrCnpj(input) {
+    const raw = String(input ?? "").trim();
+    const digits = onlyDigits(raw);
+    if (![11, 14].includes(digits.length))
+        return null;
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from("omie_parties")
+        .select("id, name, cpf_cnpj, email, omie_code")
+        .or(`cpf_cnpj.eq.${raw},cpf_cnpj.eq.${digits},cpf_cnpj.ilike.%${digits}%`)
+        .maybeSingle();
+    if (error)
+        throw error;
+    return data ?? null;
+}
 function getDeepLink(token) {
-    const base = stripQuotes(process.env.APP_RESET_BASE_URL); // triade://reset-password
+    const base = stripQuotes(process.env.APP_RESET_BASE_URL); // ex: triade://reset-password
     if (!base)
         throw new Error("APP_RESET_BASE_URL não configurado");
     return `${base}?token=${encodeURIComponent(token)}`;
 }
 function getPublicRedirectLink(token) {
-    const pub = stripQuotes(process.env.PUBLIC_BACKEND_URL); // https://triade-backend.onrender.com
+    const pub = stripQuotes(process.env.PUBLIC_BACKEND_URL); // ex: https://triade-backend.onrender.com
     if (!pub)
         throw new Error("PUBLIC_BACKEND_URL não configurado");
     return `${pub.replace(/\/$/, "")}/r/reset?token=${encodeURIComponent(token)}`;
@@ -72,7 +87,7 @@ function getMailerSMTP() {
 }
 async function sendEmail(params) {
     const resendKey = stripQuotes(process.env.RESEND_API_KEY);
-    // ✅ Preferência: Resend (HTTPS)
+    // ✅ Preferência: Resend
     if (resendKey) {
         const fromEnv = process.env.RESEND_FROM || "Triade <reset@espacopart.com.br>";
         const { raw, cleaned } = sanitizeEmailFrom(fromEnv);
@@ -81,32 +96,27 @@ async function sendEmail(params) {
             console.log("[resend] INVALID RESEND_FROM cleaned =", JSON.stringify(cleaned));
             throw new Error("RESEND_FROM inválido no env");
         }
-        try {
-            const resp = await axios_1.default.post("https://api.resend.com/emails", {
-                from: cleaned,
-                to: [params.to],
-                subject: params.subject,
-                text: params.text,
-                html: params.html,
-            }, {
-                headers: {
-                    Authorization: `Bearer ${resendKey}`,
-                    "Content-Type": "application/json",
-                },
-                timeout: 15000,
-            });
-            console.log("[resend] sent ok:", resp?.data);
-            return { provider: "resend" };
-        }
-        catch (e) {
-            console.log("[resend] error status:", e?.response?.status);
-            console.log("[resend] error data:", e?.response?.data || e?.message || e);
-            throw e;
-        }
+        const resp = await axios_1.default.post("https://api.resend.com/emails", {
+            from: cleaned,
+            to: [params.to],
+            subject: params.subject,
+            text: params.text,
+            html: params.html,
+        }, {
+            headers: {
+                Authorization: `Bearer ${resendKey}`,
+                "Content-Type": "application/json",
+            },
+            timeout: 15000,
+        });
+        console.log("[resend] sent ok:", resp?.data);
+        return { provider: "resend" };
     }
-    // 🔁 Fallback: SMTP (local/dev)
+    // 🔁 Fallback: SMTP
     const transporter = getMailerSMTP();
-    const fromSMTP = stripQuotes(process.env.MAIL_FROM) || stripQuotes(process.env.SMTP_FROM) || "Triade <no-reply@triade.com.br>";
+    const fromSMTP = stripQuotes(process.env.MAIL_FROM) ||
+        stripQuotes(process.env.SMTP_FROM) ||
+        "Triade <no-reply@triade.com.br>";
     await transporter.sendMail({
         from: fromSMTP,
         to: params.to,
@@ -134,8 +144,7 @@ router.get("/r/reset", async (req, res) => {
     return res
         .status(200)
         .setHeader("Content-Type", "text/html; charset=utf-8")
-        .send(`
-<!doctype html>
+        .send(`<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -160,8 +169,7 @@ router.get("/r/reset", async (req, res) => {
       window.location.href = "${deepLink}";
     </script>
   </body>
-</html>
-`);
+</html>`);
 });
 /* =========================
    POST /auth/forgot-password
@@ -172,16 +180,16 @@ router.post("/auth/forgot-password", async (req, res) => {
         message: "Se existir uma conta com esse CPF, enviaremos um link de redefinição.",
     };
     try {
-        const cpf = onlyDigits(req.body?.cpf);
-        if (!cpf)
+        const cpfInput = String(req.body?.cpf ?? "").trim();
+        const digits = onlyDigits(cpfInput);
+        if (!digits)
             return res.status(400).json({ ok: false, error: "CPF obrigatório" });
-        const { data: party, error: partyErr } = await supabase_1.supabaseAdmin
-            .from("omie_parties")
-            .select("id,email")
-            .eq("cpf_cnpj", cpf)
-            .maybeSingle();
-        if (partyErr || !party?.id || !party?.email)
+        // ✅ agora funciona com/sem máscara
+        const party = await findPartyByCpfOrCnpj(cpfInput);
+        if (!party?.id || !party?.email) {
+            // não revela se existe ou não
             return res.json(neutral);
+        }
         const ttlMin = Number(stripQuotes(process.env.RESET_TOKEN_TTL_MINUTES || "30"));
         const token = crypto_1.default.randomBytes(32).toString("hex");
         const tokenHash = sha256Hex(token);
@@ -209,7 +217,8 @@ router.post("/auth/forgot-password", async (req, res) => {
         }
         const deepLink = getDeepLink(token);
         const redirectLink = getPublicRedirectLink(token);
-        console.log("RESET deepLink =", deepLink);
+        console.log("RESET cpfInput =", cpfInput, "digits =", digits);
+        console.log("RESET party.id =", party.id, "party.email =", party.email);
         console.log("RESET redirectLink =", redirectLink);
         const subject = "Redefinição de senha - Triade";
         const text = `Você solicitou a redefinição de senha.\n\n` +
@@ -274,7 +283,9 @@ router.post("/auth/reset-password", async (req, res) => {
             .maybeSingle();
         if (findErr || !authRow?.id)
             return res.status(400).json({ ok: false, error: "Token inválido" });
-        const expMs = authRow.reset_token_expires_at ? new Date(authRow.reset_token_expires_at).getTime() : 0;
+        const expMs = authRow.reset_token_expires_at
+            ? new Date(authRow.reset_token_expires_at).getTime()
+            : 0;
         if (!expMs || expMs < Date.now())
             return res.status(400).json({ ok: false, error: "Token expirado" });
         const password_hash = await bcryptjs_1.default.hash(newPassword, 12);
@@ -282,6 +293,7 @@ router.post("/auth/reset-password", async (req, res) => {
             .from("party_auth")
             .update({
             password_hash,
+            must_change_password: false,
             reset_token_hash: null,
             reset_token_expires_at: null,
             reset_token_sent_at: null,
