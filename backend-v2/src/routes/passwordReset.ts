@@ -47,22 +47,24 @@ function getPublicRedirectLink(token: string) {
 }
 
 /**
- * ✅ Helper: encontra omie_parties por CPF/CNPJ com OU sem pontuação
+ * ✅ Helper: encontra party por CPF/CNPJ com ou sem máscara
+ * - aceita raw "123.989.216-03" ou "12398921603"
+ * - tenta eq raw, eq digits e fallback ilike com digits
  */
-async function findPartyByCpf(rawCpf: string) {
-  const raw = String(rawCpf ?? "").trim();
+async function findPartyByCpfOrCnpj(rawCpfCnpj: string) {
+  const raw = String(rawCpfCnpj ?? "").trim();
   const digits = onlyDigits(raw);
 
   if (![11, 14].includes(digits.length)) return null;
 
-  const { data: party, error } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("omie_parties")
     .select("id,email,cpf_cnpj,name,omie_code")
     .or(`cpf_cnpj.eq.${raw},cpf_cnpj.eq.${digits},cpf_cnpj.ilike.%${digits}%`)
     .maybeSingle();
 
   if (error) throw error;
-  return party ?? null;
+  return data ?? null;
 }
 
 /* =========================
@@ -83,11 +85,9 @@ function getMailerSMTP() {
     port,
     secure,
     auth: { user, pass },
-
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 10000,
-
     requireTLS: !secure,
     tls: { rejectUnauthorized: false },
   });
@@ -96,6 +96,7 @@ function getMailerSMTP() {
 async function sendEmail(params: { to: string; subject: string; text: string; html: string }) {
   const resendKey = stripQuotes(process.env.RESEND_API_KEY);
 
+  // ✅ Preferência: Resend (HTTPS)
   if (resendKey) {
     const fromEnv = process.env.RESEND_FROM || "Triade <reset@espacopart.com.br>";
     const { raw, cleaned } = sanitizeEmailFrom(fromEnv);
@@ -134,7 +135,9 @@ async function sendEmail(params: { to: string; subject: string; text: string; ht
     }
   }
 
+  // 🔁 Fallback: SMTP (local/dev)
   const transporter = getMailerSMTP();
+
   const fromSMTP =
     stripQuotes(process.env.MAIL_FROM) ||
     stripQuotes(process.env.SMTP_FROM) ||
@@ -210,11 +213,13 @@ router.post("/auth/forgot-password", async (req, res) => {
 
   try {
     const rawCpf = String(req.body?.cpf ?? "").trim();
-    const digits = onlyDigits(rawCpf);
-    if (!digits) return res.status(400).json({ ok: false, error: "CPF obrigatório" });
+    const cpfDigits = onlyDigits(rawCpf);
 
-    // ✅ agora funciona com e sem máscara
-    const party = await findPartyByCpf(rawCpf);
+    if (!cpfDigits) return res.status(400).json({ ok: false, error: "CPF obrigatório" });
+    if (cpfDigits.length !== 11) return res.status(400).json({ ok: false, error: "CPF inválido" });
+
+    // ✅ CORREÇÃO: busca flexível (com/sem máscara)
+    const party = await findPartyByCpfOrCnpj(rawCpf);
     if (!party?.id || !party?.email) return res.json(neutral);
 
     const ttlMin = Number(stripQuotes(process.env.RESET_TOKEN_TTL_MINUTES || "30"));
@@ -228,6 +233,7 @@ router.post("/auth/forgot-password", async (req, res) => {
       reset_token_sent_at: new Date().toISOString(),
     };
 
+    // update -> se não existir, upsert
     const { error: updErr, data: updData } = await supabaseAdmin
       .from("party_auth")
       .update(updatePayload)
@@ -248,7 +254,6 @@ router.post("/auth/forgot-password", async (req, res) => {
     const deepLink = getDeepLink(token);
     const redirectLink = getPublicRedirectLink(token);
 
-    console.log("RESET cpf(raw) =", rawCpf, "digits =", digits);
     console.log("RESET deepLink =", deepLink);
     console.log("RESET redirectLink =", redirectLink);
 
@@ -296,7 +301,7 @@ router.post("/auth/forgot-password", async (req, res) => {
     return res.json(neutral);
   } catch (e: any) {
     console.log("[forgot-password] catch error:", e?.message || e);
-    return res.json({ ok: true, message: "Se existir uma conta com esse CPF, enviaremos um link de redefinição." });
+    return res.json(neutral);
   }
 });
 
@@ -323,7 +328,10 @@ router.post("/auth/reset-password", async (req, res) => {
 
     if (findErr || !authRow?.id) return res.status(400).json({ ok: false, error: "Token inválido" });
 
-    const expMs = authRow.reset_token_expires_at ? new Date(authRow.reset_token_expires_at).getTime() : 0;
+    const expMs = authRow.reset_token_expires_at
+      ? new Date(authRow.reset_token_expires_at).getTime()
+      : 0;
+
     if (!expMs || expMs < Date.now()) return res.status(400).json({ ok: false, error: "Token expirado" });
 
     const password_hash = await bcrypt.hash(newPassword, 12);
