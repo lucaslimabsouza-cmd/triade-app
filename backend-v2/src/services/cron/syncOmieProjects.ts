@@ -8,8 +8,8 @@ function s(v: any) {
   return String(v ?? "").trim();
 }
 
-export async function syncOmieProjects() {
-  const last = await getLastSyncAt(SOURCE);
+export async function syncOmieProjects(options?: { fullSync?: boolean }) {
+  const last = options?.fullSync ? null : await getLastSyncAt(SOURCE);
   const since = last ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
   const { items, pages } = await omieFetchAllPaged<any>({

@@ -4,8 +4,8 @@ import { omieFetchAllPaged } from "../omie/omiePaged";
 
 const SOURCE = "omie_parties";
 
-export async function syncOmieParties() {
-  const last = await getLastSyncAt(SOURCE);
+export async function syncOmieParties(options?: { fullSync?: boolean }) {
+  const last = options?.fullSync ? null : await getLastSyncAt(SOURCE);
   const since = last ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const { items, pages } = await omieFetchAllPaged<any>({

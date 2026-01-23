@@ -51,7 +51,7 @@ router.post("/cron/test-omie-parties", requireAdmin, async (req, res) => {
   try {
     const fullSync = req.query.fullSync === "true";
     logger.info("[cron/test-omie-parties] Iniciando sincronização", { fullSync });
-    const result = await syncOmieParties({ fullSync });
+    const result = await syncOmieParties(fullSync ? { fullSync: true } : undefined);
     logger.info("[cron/test-omie-parties] Sincronização concluída", result);
     return res.json({ ok: true, ...result });
   } catch (e: any) {
@@ -65,7 +65,7 @@ router.post("/cron/test-omie-categories", requireAdmin, async (req, res) => {
   try {
     const fullSync = req.query.fullSync === "true";
     logger.info("[cron/test-omie-categories] Iniciando sincronização", { fullSync });
-    const result = await syncOmieCategories({ fullSync });
+    const result = await syncOmieCategories(fullSync ? { fullSync: true } : undefined);
     logger.info("[cron/test-omie-categories] Sincronização concluída", result);
     return res.json({ ok: true, ...result });
   } catch (e: any) {
@@ -79,7 +79,7 @@ router.post("/cron/test-omie-projects", requireAdmin, async (req, res) => {
   try {
     const fullSync = req.query.fullSync === "true";
     logger.info("[cron/test-omie-projects] Iniciando sincronização", { fullSync });
-    const result = await syncOmieProjects({ fullSync });
+    const result = await syncOmieProjects(fullSync ? { fullSync: true } : undefined);
     logger.info("[cron/test-omie-projects] Sincronização concluída", result);
     return res.json({ ok: true, ...result });
   } catch (e: any) {
@@ -93,7 +93,7 @@ router.post("/cron/test-omie-accounts-payable", requireAdmin, async (req, res) =
   try {
     const fullSync = req.query.fullSync === "true";
     logger.info("[cron/test-omie-accounts-payable] Iniciando sincronização", { fullSync });
-    const result = await syncOmieAccountsPayable({ fullSync });
+    const result = await syncOmieAccountsPayable(fullSync ? { fullSync: true } : undefined);
     logger.info("[cron/test-omie-accounts-payable] Sincronização concluída", result);
     return res.json({ ok: true, ...result });
   } catch (e: any) {

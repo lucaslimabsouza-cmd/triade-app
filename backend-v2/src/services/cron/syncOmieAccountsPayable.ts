@@ -43,8 +43,8 @@ function parseDateAny(v: any): string | null {
   return isNaN(dt.getTime()) ? null : dt.toISOString();
 }
 
-export async function syncOmieAccountsPayable() {
-  const last = await getLastSyncAt(SOURCE);
+export async function syncOmieAccountsPayable(options?: { fullSync?: boolean }) {
+  const last = options?.fullSync ? null : await getLastSyncAt(SOURCE);
   const since =
     last ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 

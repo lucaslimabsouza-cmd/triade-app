@@ -4,8 +4,8 @@ import { omieFetchAllPaged } from "../omie/omiePaged";
 
 const SOURCE = "omie_categories";
 
-export async function syncOmieCategories() {
-  const last = await getLastSyncAt(SOURCE);
+export async function syncOmieCategories(options?: { fullSync?: boolean }) {
+  const last = options?.fullSync ? null : await getLastSyncAt(SOURCE);
   // categories mudam pouco → não precisa lookback grande
   const since = last ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 

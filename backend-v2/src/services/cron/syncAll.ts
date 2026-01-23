@@ -27,11 +27,11 @@ export async function syncAll() {
   await runStep("excel_notifications", syncExcelNotifications);
 
   // Omie
-  await runStep("omie_categories", syncOmieCategories);
-  await runStep("omie_parties", syncOmieParties);
-  await runStep("omie_projects", syncOmieProjects);
-  await runStep("omie_accounts_payable", syncOmieAccountsPayable);
-  await runStep("omie_mf_movements", syncOmieMfMovements);
+  await runStep("omie_categories", () => syncOmieCategories());
+  await runStep("omie_parties", () => syncOmieParties());
+  await runStep("omie_projects", () => syncOmieProjects());
+  await runStep("omie_accounts_payable", () => syncOmieAccountsPayable());
+  await runStep("omie_mf_movements", () => syncOmieMfMovements());
 
   return { startedAt, finishedAt: new Date().toISOString(), steps };
 }
