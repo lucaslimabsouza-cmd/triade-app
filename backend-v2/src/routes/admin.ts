@@ -307,7 +307,6 @@ router.get("/admin/parties/with-financial", requireAuth, requireAdmin, async (re
           lucroDistribuido: financial.profit,
         };
       })
-      .filter((p: any) => p.valorInvestido > 0) // Só clientes com investimento
       .sort((a: any, b: any) => b.valorInvestido - a.valorInvestido); // Ordenar por valor investido (maior primeiro)
 
     logger.info("Admin: listou clientes com dados financeiros", { count: partiesWithFinancial.length });
@@ -351,6 +350,197 @@ router.get("/admin/movements/all", requireAuth, requireAdmin, async (req: Reques
   } catch (err: any) {
     logger.error("admin/movements/all error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: err?.message ?? String(err) });
+  }
+});
+
+/* =========================
+   ✅ Dados financeiros de operação (SEM FILTRO POR CPF - para admin)
+========================= */
+router.get("/admin/operation-financial/:operationId", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const operationId = String(req.params.operationId || "").trim();
+    if (!operationId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
+      return res.status(400).json({ ok: false, error: "INVALID_OPERATION_ID", operationId });
+    }
+
+    const roiExpectedRaw = Number(req.query.roi_expected ?? 0);
+    const roiExpectedPercent = roiExpectedRaw < 1 ? roiExpectedRaw * 100 : roiExpectedRaw;
+
+    const { data: op, error: opErr } = await supabaseAdmin
+      .from("operations")
+      .select("id,name")
+      .eq("id", operationId)
+      .single();
+
+    if (opErr) throw new Error(`Supabase operations error: ${opErr.message}`);
+    if (!op) return res.status(404).json({ ok: false, error: "OPERATION_NOT_FOUND" });
+
+    const operationName = String(op.name ?? "").trim();
+    if (!operationName) return res.status(400).json({ ok: false, error: "OPERATION_NAME_EMPTY" });
+
+    const { data: projects, error: projErr } = await supabaseAdmin
+      .from("omie_projects")
+      .select("name,omie_internal_code")
+      .ilike("name", `%${operationName}%`)
+      .limit(20);
+
+    if (projErr) throw new Error(`Supabase omie_projects error: ${projErr.message}`);
+
+    const target = String(operationName)
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ");
+
+    const best =
+      (projects ?? [])
+        .map((p: any) => {
+          const n = String(p.name ?? "")
+            .trim()
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/\s+/g, " ");
+          const score = n === target ? 3 : n.includes(target) || target.includes(n) ? 2 : 1;
+          return { ...p, score };
+        })
+        .sort((a: any, b: any) => b.score - a.score)[0] ?? null;
+
+    if (!best?.omie_internal_code) {
+      return res.status(404).json({ ok: false, error: "OMIE_PROJECT_NOT_FOUND_BY_NAME", operationName });
+    }
+
+    const projectInternalCode = String(best.omie_internal_code ?? "").trim();
+
+    // ✅ SEM FILTRO DE CLIENTE - buscar TODAS as movimentações do projeto
+    const { data: movementsInvested, error: movInvestedErr } = await supabaseAdmin
+      .from("omie_mf_movements")
+      .select("valor")
+      .eq("cod_projeto", projectInternalCode)
+      .eq("cod_categoria", "1.04.02");
+
+    if (movInvestedErr) throw new Error(`Supabase omie_mf_movements error: ${movInvestedErr.message}`);
+
+    const { data: movementsRealized, error: movRealizedErr } = await supabaseAdmin
+      .from("omie_mf_movements")
+      .select("valor")
+      .eq("cod_projeto", projectInternalCode)
+      .eq("cod_categoria", "2.10.98");
+
+    if (movRealizedErr) throw new Error(`Supabase omie_mf_movements error: ${movRealizedErr.message}`);
+
+    const amountInvested = (movementsInvested ?? []).reduce((acc: number, row: any) => acc + Math.abs(Number(row?.valor ?? 0)), 0);
+    const realizedValue = (movementsRealized ?? []).reduce((acc: number, row: any) => acc + Math.abs(Number(row?.valor ?? 0)), 0);
+
+    const expectedProfit = amountInvested && roiExpectedPercent ? amountInvested * (roiExpectedPercent / 100) : 0;
+    const realizedRoiPercent = amountInvested > 0 ? (realizedValue / amountInvested) * 100 : 0;
+
+    return res.json({
+      ok: true,
+      operationId,
+      operationName,
+      projectInternalCode,
+      amountInvested,
+      expectedProfit,
+      realizedProfit: realizedValue,
+      realizedRoiPercent,
+      roiExpectedPercent,
+    });
+  } catch (e: any) {
+    logger.error("admin/operation-financial error", e);
+    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: e?.message ?? String(e) });
+  }
+});
+
+/* =========================
+   ✅ Operações de um cliente específico (para dropdown)
+========================= */
+router.get("/admin/parties/:partyId/operations", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const partyId = String(req.params.partyId || "").trim();
+    if (!partyId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(partyId)) {
+      return res.status(400).json({ ok: false, error: "INVALID_PARTY_ID", partyId });
+    }
+
+    // 1) Buscar o cliente pelo partyId
+    const { data: party, error: partyErr } = await supabaseAdmin
+      .from("omie_parties")
+      .select("omie_code")
+      .eq("id", partyId)
+      .single();
+
+    if (partyErr) throw new Error(`Supabase omie_parties error: ${partyErr.message}`);
+    if (!party) return res.status(404).json({ ok: false, error: "PARTY_NOT_FOUND" });
+
+    const omieCode = norm(party.omie_code);
+    if (!omieCode) {
+      return res.json({ ok: true, operations: [] });
+    }
+
+    // 2) Converter omie_code para número (se possível)
+    const omieCodeNum = Number(omieCode);
+    const codeForIn = Number.isFinite(omieCodeNum) ? omieCodeNum : omieCode;
+
+    // 3) Buscar movimentações do cliente para pegar os projetos únicos
+    const { data: movements, error: movErr } = await supabaseAdmin
+      .from("omie_mf_movements")
+      .select("cod_projeto")
+      .eq("cod_cliente", codeForIn);
+
+    if (movErr) throw new Error(`Supabase omie_mf_movements error: ${movErr.message}`);
+
+    const projectCodes = Array.from(
+      new Set((movements ?? []).map((m: any) => norm(m.cod_projeto)).filter(Boolean))
+    );
+
+    if (projectCodes.length === 0) {
+      return res.json({ ok: true, operations: [] });
+    }
+
+    // 4) Buscar projetos pelos códigos
+    const { data: projects, error: projErr } = await supabaseAdmin
+      .from("omie_projects")
+      .select("name, omie_internal_code")
+      .in("omie_internal_code", projectCodes);
+
+    if (projErr) throw new Error(`Supabase omie_projects error: ${projErr.message}`);
+
+    const projectNames = Array.from(
+      new Set((projects ?? []).map((p: any) => norm(p.name)).filter(Boolean))
+    );
+
+    if (projectNames.length === 0) {
+      return res.json({ ok: true, operations: [] });
+    }
+
+    // 5) Buscar operações pelos nomes dos projetos
+    const { data: operations, error: opsErr } = await supabaseAdmin
+      .from("operations")
+      .select("id, name")
+      .in("name", projectNames);
+
+    if (opsErr) throw new Error(`Supabase operations error: ${opsErr.message}`);
+
+    const operationNames = (operations ?? [])
+      .map((op: any) => norm(op.name))
+      .filter(Boolean)
+      .sort();
+
+    logger.info("Admin: listou operações do cliente", {
+      partyId,
+      omieCode,
+      count: operationNames.length,
+    });
+
+    return res.json({
+      ok: true,
+      operations: operationNames,
+      count: operationNames.length,
+    });
+  } catch (e: any) {
+    logger.error("admin/parties/:partyId/operations error", e);
+    return res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: e?.message ?? String(e) });
   }
 });
 
