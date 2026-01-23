@@ -46,10 +46,14 @@ export async function syncOmieParties(options?: { fullSync?: boolean }) {
       // Tenta vários campos possíveis para CPF/CNPJ
       const cpf_cnpj = x.cnpj_cpf ?? x.cpf_cnpj ?? x.cCnpjCpf ?? x.cnpj ?? x.cpf ?? null;
 
+      // Tenta vários campos possíveis para email
+      const email = x.email ?? x.e_mail ?? x.email_principal ?? x.cEmail ?? x.email_financeiro ?? null;
+
       return {
         omie_code,
         name,
         cpf_cnpj,
+        email,
         raw_payload: x,
         updated_at: new Date().toISOString(),
       };
