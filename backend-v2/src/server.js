@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const logger_1 = require("./lib/logger");
 // Rotas base
 const health_1 = __importDefault(require("./routes/health"));
 // Sync
@@ -30,11 +31,15 @@ const app = (0, express_1.default)();
 ========================= */
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
-// ✅ Log de request + status
+// ✅ Log de request + status usando logger
 app.use((req, res, next) => {
     const t0 = Date.now();
     res.on("finish", () => {
-        console.log(`[REQ] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - t0}ms)`);
+        const duration = Date.now() - t0;
+        logger_1.logger.info(`${req.method} ${req.path}`, {
+            status: res.statusCode,
+            duration: `${duration}ms`,
+        });
     });
     next();
 });
@@ -77,11 +82,23 @@ app.use(passwordReset_1.default);
 app.use(cron_1.default);
 app.use(cron_sync_all_1.default);
 app.use("/operation-costs", operation_costs_1.default);
-console.log("✅ route mounted: /operation-costs");
+logger_1.logger.info("Route mounted: /operation-costs");
+/* =========================
+   Error Handler
+========================= */
+app.use((err, _req, res, _next) => {
+    logger_1.logger.error("Erro não tratado", err);
+    res.status(500).json({
+        ok: false,
+        error: process.env.NODE_ENV === "production" ? "Erro interno do servidor" : err.message,
+    });
+});
 /* =========================
    Start server
 ========================= */
 const port = Number(process.env.PORT ?? 4001);
 app.listen(port, () => {
-    console.log(`backend-v2 rodando na porta ${port}`);
+    logger_1.logger.info(`Backend-v2 rodando na porta ${port}`, {
+        env: process.env.NODE_ENV || "development",
+    });
 });

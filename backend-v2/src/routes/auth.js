@@ -8,6 +8,8 @@ const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const supabase_1 = require("../lib/supabase");
+const logger_1 = require("../lib/logger");
+const validators_1 = require("../lib/validators");
 const router = (0, express_1.Router)();
 /* =========================
    Utils
@@ -100,6 +102,7 @@ router.post("/admin/set-initial-password", async (req, res) => {
         }, { onConflict: "party_id" });
         if (upsertErr)
             throw upsertErr;
+        logger_1.logger.info("Senha inicial criada", { party_id: party.id });
         return res.json({
             ok: true,
             party: {
@@ -111,7 +114,7 @@ router.post("/admin/set-initial-password", async (req, res) => {
         });
     }
     catch (err) {
-        console.error("set-initial-password error:", err);
+        logger_1.logger.error("set-initial-password error", err);
         return res.status(500).json({ ok: false, error: "Erro interno" });
     }
 });
@@ -123,7 +126,7 @@ router.post("/admin/set-initial-password", async (req, res) => {
  * Body: { cpf_cnpj, cpf, password }
  * (aceita cpf OU cpf_cnpj para compatibilidade com o mobile)
  */
-router.post("/login", async (req, res) => {
+router.post("/login", (0, validators_1.validateBody)(validators_1.loginSchema), async (req, res) => {
     try {
         const rawCpf = String(req.body?.cpf_cnpj || req.body?.cpf || "").trim();
         const cpfDigits = onlyDigits(rawCpf);
@@ -157,6 +160,7 @@ router.post("/login", async (req, res) => {
             party_id: party.id,
             cpf_cnpj: party.cpf_cnpj,
         });
+        logger_1.logger.info("Login realizado", { party_id: party.id, cpf_cnpj: party.cpf_cnpj });
         return res.json({
             ok: true,
             token,
@@ -170,7 +174,7 @@ router.post("/login", async (req, res) => {
         });
     }
     catch (err) {
-        console.error("login error:", err);
+        logger_1.logger.error("login error", err);
         return res.status(500).json({ ok: false, error: "Erro interno" });
     }
 });
@@ -182,7 +186,7 @@ router.post("/login", async (req, res) => {
  * Header: Authorization Bearer <token>
  * Body: { oldPassword, newPassword }
  */
-router.post("/change-password", requireAuth, async (req, res) => {
+router.post("/change-password", requireAuth, (0, validators_1.validateBody)(validators_1.changePasswordSchema), async (req, res) => {
     try {
         const user = req.user;
         const partyId = user?.party_id;
@@ -221,10 +225,11 @@ router.post("/change-password", requireAuth, async (req, res) => {
             .eq("party_id", partyId);
         if (updErr)
             throw updErr;
+        logger_1.logger.info("Senha alterada", { party_id: partyId });
         return res.json({ ok: true });
     }
     catch (err) {
-        console.error("change-password error:", err);
+        logger_1.logger.error("change-password error", err);
         return res.status(500).json({ ok: false, error: "Erro interno" });
     }
 });

@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "76f84276-2d5f-424c-8b9e-e72c604e0c9b"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.lucassouza1.backendv2",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import { logger } from "./lib/logger";
 
 // Rotas base
 import healthRouter from "./routes/health";
@@ -32,13 +33,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Log de request + status
+// ✅ Log de request + status usando logger
 app.use((req, res, next) => {
   const t0 = Date.now();
   res.on("finish", () => {
-    console.log(
-      `[REQ] ${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - t0}ms)`
-    );
+    const duration = Date.now() - t0;
+    logger.info(`${req.method} ${req.path}`, {
+      status: res.statusCode,
+      duration: `${duration}ms`,
+    });
   });
   next();
 });
@@ -88,7 +91,18 @@ app.use(cronRoutes);
 app.use(cronSyncAllRouter);
 
 app.use("/operation-costs", operationCostsRouter);
-console.log("✅ route mounted: /operation-costs");
+logger.info("Route mounted: /operation-costs");
+
+/* =========================
+   Error Handler
+========================= */
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  logger.error("Erro não tratado", err);
+  res.status(500).json({
+    ok: false,
+    error: process.env.NODE_ENV === "production" ? "Erro interno do servidor" : err.message,
+  });
+});
 
 /* =========================
    Start server
@@ -96,5 +110,7 @@ console.log("✅ route mounted: /operation-costs");
 const port = Number(process.env.PORT ?? 4001);
 
 app.listen(port, () => {
-  console.log(`backend-v2 rodando na porta ${port}`);
+  logger.info(`Backend-v2 rodando na porta ${port}`, {
+    env: process.env.NODE_ENV || "development",
+  });
 });

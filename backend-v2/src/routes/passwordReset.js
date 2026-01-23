@@ -29,8 +29,22 @@ function sanitizeEmailFrom(v) {
 }
 function isValidFromFormat(from) {
     const plain = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
-    const named = /^.+\s<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>$/;
+    const named = /^.+\s<[^<>\s@]+@[^<>\s@<>]+\.[^\s@<>]+>$/;
     return plain.test(from) || named.test(from);
+}
+/** formata CPF 12398921603 -> 123.989.216-03 */
+function maskCpf(digits11) {
+    const d = onlyDigits(digits11);
+    if (d.length !== 11)
+        return "";
+    return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9, 11)}`;
+}
+/** formata CNPJ 12345678000190 -> 12.345.678/0001-90 */
+function maskCnpj(digits14) {
+    const d = onlyDigits(digits14);
+    if (d.length !== 14)
+        return "";
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12, 14)}`;
 }
 function getDeepLink(token) {
     const base = stripQuotes(process.env.APP_RESET_BASE_URL); // triade://reset-password
@@ -46,20 +60,36 @@ function getPublicRedirectLink(token) {
 }
 /**
  * ✅ Helper: encontra omie_parties por CPF/CNPJ com OU sem pontuação
+ * IMPORTANTE: ilike com digits NÃO funciona quando o banco guarda mascarado.
+ * Então fazemos match por candidatos: raw, digits, masked gerado.
  */
 async function findPartyByCpf(rawCpf) {
     const raw = String(rawCpf ?? "").trim();
     const digits = onlyDigits(raw);
     if (![11, 14].includes(digits.length))
         return null;
-    const { data: party, error } = await supabase_1.supabaseAdmin
+    const candidates = new Set();
+    if (raw)
+        candidates.add(raw);
+    if (digits)
+        candidates.add(digits);
+    if (digits.length === 11)
+        candidates.add(maskCpf(digits));
+    if (digits.length === 14)
+        candidates.add(maskCnpj(digits));
+    const list = Array.from(candidates).filter(Boolean);
+    const { data: parties, error } = await supabase_1.supabaseAdmin
         .from("omie_parties")
         .select("id,email,cpf_cnpj,name,omie_code")
-        .or(`cpf_cnpj.eq.${raw},cpf_cnpj.eq.${digits},cpf_cnpj.ilike.%${digits}%`)
-        .maybeSingle();
+        .in("cpf_cnpj", list)
+        .limit(5);
     if (error)
         throw error;
-    return party ?? null;
+    // se vier mais de 1 (raríssimo), preferir o que tem email
+    const best = (parties ?? []).find((p) => String(p?.email ?? "").trim()) ??
+        (parties ?? [])[0] ??
+        null;
+    return best;
 }
 /* =========================
    Mail: Resend (prod) + SMTP (fallback)
@@ -86,6 +116,7 @@ function getMailerSMTP() {
 }
 async function sendEmail(params) {
     const resendKey = stripQuotes(process.env.RESEND_API_KEY);
+    // ✅ Preferência: Resend (HTTPS)
     if (resendKey) {
         const fromEnv = process.env.RESEND_FROM || "Triade <reset@espacopart.com.br>";
         const { raw, cleaned } = sanitizeEmailFrom(fromEnv);
@@ -117,6 +148,7 @@ async function sendEmail(params) {
             throw e;
         }
     }
+    // 🔁 Fallback: SMTP
     const transporter = getMailerSMTP();
     const fromSMTP = stripQuotes(process.env.MAIL_FROM) ||
         stripQuotes(process.env.SMTP_FROM) ||
@@ -190,10 +222,12 @@ router.post("/auth/forgot-password", async (req, res) => {
         const digits = onlyDigits(rawCpf);
         if (!digits)
             return res.status(400).json({ ok: false, error: "CPF obrigatório" });
-        // ✅ agora funciona com e sem máscara
         const party = await findPartyByCpf(rawCpf);
-        if (!party?.id || !party?.email)
+        // não vaza info se não achou / não tem email
+        if (!party?.id || !String(party?.email ?? "").trim()) {
+            console.log("[forgot-password] party not found or missing email. rawCpf=", rawCpf);
             return res.json(neutral);
+        }
         const ttlMin = Number(stripQuotes(process.env.RESET_TOKEN_TTL_MINUTES || "30"));
         const token = crypto_1.default.randomBytes(32).toString("hex");
         const tokenHash = sha256Hex(token);
@@ -203,6 +237,7 @@ router.post("/auth/forgot-password", async (req, res) => {
             reset_token_expires_at: expiresAt,
             reset_token_sent_at: new Date().toISOString(),
         };
+        // update -> se não existir, upsert
         const { error: updErr, data: updData } = await supabase_1.supabaseAdmin
             .from("party_auth")
             .update(updatePayload)
@@ -215,13 +250,14 @@ router.post("/auth/forgot-password", async (req, res) => {
                 .upsert({ party_id: party.id, ...updatePayload }, { onConflict: "party_id" })
                 .select("id")
                 .maybeSingle();
-            if (upsertErr || !upsertData?.id)
+            if (upsertErr || !upsertData?.id) {
+                console.log("[forgot-password] failed to upsert party_auth:", upsertErr?.message);
                 return res.json(neutral);
+            }
         }
         const deepLink = getDeepLink(token);
         const redirectLink = getPublicRedirectLink(token);
-        console.log("RESET cpf(raw) =", rawCpf, "digits =", digits);
-        console.log("RESET deepLink =", deepLink);
+        console.log("RESET cpf(raw) =", rawCpf, "digits =", digits, "party.cpf_cnpj =", party.cpf_cnpj);
         console.log("RESET redirectLink =", redirectLink);
         const subject = "Redefinição de senha - Triade";
         const text = `Você solicitou a redefinição de senha.\n\n` +
@@ -253,7 +289,7 @@ router.post("/auth/forgot-password", async (req, res) => {
       </div>
     `;
         const sent = await sendEmail({
-            to: party.email,
+            to: String(party.email).trim(),
             subject,
             text,
             html,
@@ -263,7 +299,7 @@ router.post("/auth/forgot-password", async (req, res) => {
     }
     catch (e) {
         console.log("[forgot-password] catch error:", e?.message || e);
-        return res.json({ ok: true, message: "Se existir uma conta com esse CPF, enviaremos um link de redefinição." });
+        return res.json(neutral);
     }
 });
 /* =========================
@@ -286,7 +322,9 @@ router.post("/auth/reset-password", async (req, res) => {
             .maybeSingle();
         if (findErr || !authRow?.id)
             return res.status(400).json({ ok: false, error: "Token inválido" });
-        const expMs = authRow.reset_token_expires_at ? new Date(authRow.reset_token_expires_at).getTime() : 0;
+        const expMs = authRow.reset_token_expires_at
+            ? new Date(authRow.reset_token_expires_at).getTime()
+            : 0;
         if (!expMs || expMs < Date.now())
             return res.status(400).json({ ok: false, error: "Token expirado" });
         const password_hash = await bcryptjs_1.default.hash(newPassword, 12);

@@ -17,15 +17,18 @@
     "expo-server-sdk": "^4.0.0",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
+    "node-cache": "^5.1.2",
     "nodemailer": "^7.0.12",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/nodemailer": "^6.4.17",
     "@types/node": "^20.17.10",
+    "@types/node-cache": "^4.2.5",
+    "@types/nodemailer": "^6.4.17",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
   }

@@ -2,6 +2,8 @@ import { Router, Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { supabaseAdmin } from "../lib/supabase";
+import { logger } from "../lib/logger";
+import { loginSchema, changePasswordSchema, validateBody } from "../lib/validators";
 
 const router = Router();
 
@@ -120,6 +122,8 @@ router.post("/admin/set-initial-password", async (req: Request, res: Response) =
 
     if (upsertErr) throw upsertErr;
 
+    logger.info("Senha inicial criada", { party_id: party.id });
+
     return res.json({
       ok: true,
       party: {
@@ -130,7 +134,7 @@ router.post("/admin/set-initial-password", async (req: Request, res: Response) =
       },
     });
   } catch (err) {
-    console.error("set-initial-password error:", err);
+    logger.error("set-initial-password error", err);
     return res.status(500).json({ ok: false, error: "Erro interno" });
   }
 });
@@ -143,7 +147,7 @@ router.post("/admin/set-initial-password", async (req: Request, res: Response) =
  * Body: { cpf_cnpj, cpf, password }
  * (aceita cpf OU cpf_cnpj para compatibilidade com o mobile)
  */
-router.post("/login", async (req: Request, res: Response) => {
+router.post("/login", validateBody(loginSchema), async (req: Request, res: Response) => {
   try {
     const rawCpf = String(req.body?.cpf_cnpj || req.body?.cpf || "").trim();
     const cpfDigits = onlyDigits(rawCpf);
@@ -184,6 +188,8 @@ router.post("/login", async (req: Request, res: Response) => {
       cpf_cnpj: party.cpf_cnpj,
     });
 
+    logger.info("Login realizado", { party_id: party.id, cpf_cnpj: party.cpf_cnpj });
+
     return res.json({
       ok: true,
       token,
@@ -196,7 +202,7 @@ router.post("/login", async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    console.error("login error:", err);
+    logger.error("login error", err);
     return res.status(500).json({ ok: false, error: "Erro interno" });
   }
 });
@@ -209,7 +215,7 @@ router.post("/login", async (req: Request, res: Response) => {
  * Header: Authorization Bearer <token>
  * Body: { oldPassword, newPassword }
  */
-router.post("/change-password", requireAuth, async (req: Request, res: Response) => {
+router.post("/change-password", requireAuth, validateBody(changePasswordSchema), async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
     const partyId = user?.party_id;
@@ -256,9 +262,11 @@ router.post("/change-password", requireAuth, async (req: Request, res: Response)
 
     if (updErr) throw updErr;
 
+    logger.info("Senha alterada", { party_id: partyId });
+
     return res.json({ ok: true });
   } catch (err) {
-    console.error("change-password error:", err);
+    logger.error("change-password error", err);
     return res.status(500).json({ ok: false, error: "Erro interno" });
   }
 });
