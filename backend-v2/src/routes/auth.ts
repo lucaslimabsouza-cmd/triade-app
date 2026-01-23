@@ -164,7 +164,7 @@ router.post("/login", validateBody(loginSchema), async (req: Request, res: Respo
 
     const { data: authRow, error: authErr } = await supabaseAdmin
       .from("party_auth")
-      .select("password_hash, must_change_password")
+      .select("password_hash, must_change_password, is_admin")
       .eq("party_id", party.id)
       .maybeSingle();
 
@@ -183,17 +183,22 @@ router.post("/login", validateBody(loginSchema), async (req: Request, res: Respo
       .update({ last_login_at: new Date().toISOString() })
       .eq("party_id", party.id);
 
+    // ✅ Verificar se é admin (safe: se não existir, assume false)
+    const isAdmin = authRow.is_admin === true;
+
     const token = signToken({
       party_id: party.id,
       cpf_cnpj: party.cpf_cnpj,
+      ...(isAdmin && { is_admin: true }), // ✅ Só adiciona no token se for admin
     });
 
-    logger.info("Login realizado", { party_id: party.id, cpf_cnpj: party.cpf_cnpj });
+    logger.info("Login realizado", { party_id: party.id, cpf_cnpj: party.cpf_cnpj, is_admin: isAdmin });
 
     return res.json({
       ok: true,
       token,
       must_change_password: authRow.must_change_password,
+      is_admin: isAdmin || false, // ✅ Garante que sempre retorna boolean
       party: {
         id: party.id,
         name: party.name,
@@ -271,7 +276,23 @@ router.post("/change-password", requireAuth, validateBody(changePasswordSchema),
   }
 });
 
+// ✅ Middleware para verificar se é admin (baseado em token)
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as any).user;
+    
+    // ✅ Verificar se is_admin está no token (safe: se não existir, assume false)
+    if (!user?.is_admin) {
+      return res.status(403).json({ ok: false, error: "FORBIDDEN - Admin only" });
+    }
+
+    next();
+  } catch {
+    return res.status(403).json({ ok: false, error: "FORBIDDEN - Admin only" });
+  }
+}
+
 // ✅ para outras rotas (me.ts etc.)
-export { requireAuth };
+export { requireAuth, requireAdmin };
 
 export default router;

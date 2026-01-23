@@ -24,6 +24,7 @@ import pushDispatchRouter from "./routes/push-dispatch";
 import passwordResetRouter from "./routes/passwordReset";
 import cronRoutes from "./routes/cron";
 import cronSyncAllRouter from "./routes/cron-sync-all";
+import adminRouter from "./routes/admin";
 
 const app = express();
 
@@ -92,6 +93,12 @@ app.use(cronSyncAllRouter);
 
 app.use("/operation-costs", operationCostsRouter);
 logger.info("Route mounted: /operation-costs");
+
+/* =========================
+   ✅ Rotas Admin (requer is_admin no token)
+========================= */
+app.use(adminRouter);
+logger.info("Route mounted: /admin/*");
 
 /* =========================
    Error Handler

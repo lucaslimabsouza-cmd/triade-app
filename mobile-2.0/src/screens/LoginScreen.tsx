@@ -87,6 +87,7 @@ export function LoginScreen({ navigation, onSignedIn }: Props) {
       await tokenStorage.set(data.token);
       const savedToken = await tokenStorage.get();
       console.log("🔐 [LoginScreen] token saved?", !!savedToken);
+      console.log("👤 [LoginScreen] is_admin?", data.is_admin);
 
       // ✅ salva nome + cpf p/ QuickAccess
       await quickAccessStorage.setUser(

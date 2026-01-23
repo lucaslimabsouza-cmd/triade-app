@@ -4,6 +4,7 @@ type LoginResponse = {
   ok: boolean;
   token?: string;
   must_change_password?: boolean;
+  is_admin?: boolean; // ✅ NOVO: indica se é admin
   party?: any;
   error?: string;
 };

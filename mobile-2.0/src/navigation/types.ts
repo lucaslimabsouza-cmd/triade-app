@@ -50,6 +50,7 @@ export type AppStackParamList = {
       matriculaConsolidada?: string;
       contratoScp?: string;
     };
+    photoUrl?: string | null;
   };
 
   OperationTimeline: {
@@ -68,4 +69,43 @@ export type AppStackParamList = {
 
   // ✅ NOVO (já existia no seu código)
   Statement: undefined;
+};
+
+// ✅ NOVO: Navegação Admin (sem filtros)
+export type AdminStackParamList = {
+  AdminHome: undefined;
+  AdminOperations: undefined;
+  AdminParties: undefined;
+  AdminMovements: undefined;
+  // ✅ Adicionar rotas para Details e Costs (mesmos parâmetros do AppStack)
+  OperationDetails: {
+    id: string;
+    name: string;
+    city: string;
+    state: string;
+    status: "em_andamento" | "concluida" | string;
+    amountInvested?: string | number;
+    expectedProfit?: string | number;
+    realizedProfit?: string | number;
+    realizedRoiPercent?: string | number;
+    roi?: string | number;
+    roiExpectedPercent?: string | number;
+    totalCosts?: string | number;
+    estimatedTerm?: string | number;
+    realizedTerm?: string | number;
+    cartaArrematacao?: string;
+    matriculaConsolidada?: string;
+    contratoScp?: string;
+    documents?: {
+      cartaArrematacao?: string;
+      matriculaConsolidada?: string;
+      contratoScp?: string;
+    };
+    photoUrl?: string | null;
+  };
+  OperationCosts: {
+    id: string;
+    name: string;
+    totalCosts?: string | number;
+  };
 };
