@@ -24,7 +24,7 @@ export async function syncOmieParties(options?: { fullSync?: boolean }) {
 
   // Se não retornou nenhum item, loga um exemplo do primeiro item para debug
   if (items.length > 0 && items.length <= 3) {
-    logger.info(`[syncOmieParties] Exemplo de item retornado:`, JSON.stringify(items[0], null, 2));
+    logger.info(`[syncOmieParties] Exemplo de item retornado:`, { item: items[0] });
   }
 
   const payloads = items
@@ -56,7 +56,7 @@ export async function syncOmieParties(options?: { fullSync?: boolean }) {
     })
     .filter((p) => {
       if (!p.omie_code) {
-        logger.warn(`[syncOmieParties] Item sem omie_code ignorado:`, JSON.stringify(p.raw_payload, null, 2));
+        logger.warn(`[syncOmieParties] Item sem omie_code ignorado:`, { raw_payload: p.raw_payload });
         return false;
       }
       return true;
