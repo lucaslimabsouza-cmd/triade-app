@@ -24,10 +24,16 @@ router.post("/cron/sync-all", requireAdmin, async (_req, res) => {
 });
 
 // ✅ Endpoint de teste específico para omie_mf_movements
-router.post("/cron/test-omie-mf-movements", requireAdmin, async (_req, res) => {
+// Query params: 
+//   ?fullSync=true (busca tudo, ignora sync_state)
+//   ?forceDays=30 (força buscar últimos N dias)
+router.post("/cron/test-omie-mf-movements", requireAdmin, async (req, res) => {
   try {
-    logger.info("[cron/test-omie-mf-movements] Iniciando sincronização");
-    const result = await syncOmieMfMovements();
+    const fullSync = req.query.fullSync === "true";
+    const forceDays = req.query.forceDays ? Number(req.query.forceDays) : undefined;
+    
+    logger.info("[cron/test-omie-mf-movements] Iniciando sincronização", { fullSync, forceDays });
+    const result = await syncOmieMfMovements({ fullSync, forceDays });
     logger.info("[cron/test-omie-mf-movements] Sincronização concluída", result);
     return res.json({ ok: true, ...result });
   } catch (e: any) {

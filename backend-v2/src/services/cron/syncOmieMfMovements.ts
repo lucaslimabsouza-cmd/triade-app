@@ -73,13 +73,25 @@ function pickCodMovCC(m: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export async function syncOmieMfMovements() {
-  const last = await getLastSyncAt(SOURCE);
-  const sinceIso =
-    last ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+export async function syncOmieMfMovements(options?: { fullSync?: boolean; forceDays?: number }) {
+  let sinceIso: string | null = null;
+  let sinceDateBR: string | null = null;
 
-  // ✅ formato certo pro Omie
-  const sinceDateBR = isoToOmieDateBR(sinceIso);
+  // Se fullSync, ignora sync_state e não usa filtro de data
+  if (options?.fullSync) {
+    sinceIso = null;
+    sinceDateBR = null;
+  } else {
+    const last = await getLastSyncAt(SOURCE);
+    
+    // Se forceDays for fornecido, ignora o último sync e busca os últimos N dias
+    sinceIso = options?.forceDays
+      ? new Date(Date.now() - options.forceDays * 24 * 60 * 60 * 1000).toISOString()
+      : last ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    // ✅ formato certo pro Omie
+    sinceDateBR = isoToOmieDateBR(sinceIso);
+  }
 
   const perPage = 200;
   let page = 1;
@@ -92,16 +104,20 @@ export async function syncOmieMfMovements() {
     let resp: any;
 
     try {
+      // Monta parâmetros: se fullSync, não inclui dDtAltDe
+      const params: any = {
+        nPagina: page,
+        nRegPorPagina: perPage,
+      };
+      
+      if (sinceDateBR) {
+        params.dDtAltDe = sinceDateBR;
+      }
+
       resp = await callOmie(
         "/financas/mf/",
         "ListarMovimentos",
-        [
-          {
-            nPagina: page,
-            nRegPorPagina: perPage,
-            dDtAltDe: sinceDateBR,
-          },
-        ]
+        [params]
       );
     } catch (err: any) {
       // ✅ log útil pro Render (sem vazar secrets)
