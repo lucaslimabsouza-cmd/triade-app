@@ -102,4 +102,69 @@ router.post("/cron/test-omie-accounts-payable", requireAdmin, async (req, res) =
   }
 });
 
+// ✅ Endpoint que atualiza TODAS as tabelas Omie de uma vez com fullSync
+router.post("/cron/test-omie-full-sync", requireAdmin, async (_req, res) => {
+  const startedAt = new Date().toISOString();
+  const results: any = {};
+
+  try {
+    logger.info("[cron/test-omie-full-sync] Iniciando sincronização completa de todas as tabelas Omie");
+
+    // Executa todas as sincronizações em paralelo para ser mais rápido
+    const [
+      partiesResult,
+      categoriesResult,
+      projectsResult,
+      accountsPayableResult,
+      mfMovementsResult,
+    ] = await Promise.allSettled([
+      syncOmieParties({ fullSync: true }),
+      syncOmieCategories({ fullSync: true }),
+      syncOmieProjects({ fullSync: true }),
+      syncOmieAccountsPayable({ fullSync: true }),
+      syncOmieMfMovements({ fullSync: true }),
+    ]);
+
+    // Processa resultados
+    results.omie_parties = partiesResult.status === "fulfilled" 
+      ? { ok: true, ...partiesResult.value }
+      : { ok: false, error: partiesResult.reason?.message || String(partiesResult.reason) };
+
+    results.omie_categories = categoriesResult.status === "fulfilled"
+      ? { ok: true, ...categoriesResult.value }
+      : { ok: false, error: categoriesResult.reason?.message || String(categoriesResult.reason) };
+
+    results.omie_projects = projectsResult.status === "fulfilled"
+      ? { ok: true, ...projectsResult.value }
+      : { ok: false, error: projectsResult.reason?.message || String(projectsResult.reason) };
+
+    results.omie_accounts_payable = accountsPayableResult.status === "fulfilled"
+      ? { ok: true, ...accountsPayableResult.value }
+      : { ok: false, error: accountsPayableResult.reason?.message || String(accountsPayableResult.reason) };
+
+    results.omie_mf_movements = mfMovementsResult.status === "fulfilled"
+      ? { ok: true, ...mfMovementsResult.value }
+      : { ok: false, error: mfMovementsResult.reason?.message || String(mfMovementsResult.reason) };
+
+    const finishedAt = new Date().toISOString();
+    logger.info("[cron/test-omie-full-sync] Sincronização completa concluída", { startedAt, finishedAt, results });
+
+    return res.json({ 
+      ok: true, 
+      startedAt, 
+      finishedAt,
+      results 
+    });
+  } catch (e: any) {
+    logger.error("[cron/test-omie-full-sync] error", e);
+    return res.status(500).json({ 
+      ok: false, 
+      error: e?.message || "Erro interno",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      results 
+    });
+  }
+});
+
 export default router;

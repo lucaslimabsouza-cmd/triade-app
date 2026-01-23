@@ -1,11 +1,13 @@
 // src/screens/NotificationsScreen.tsx
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { View, Text, StyleSheet, ScrollView, RefreshControl } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 
 import TriadeLoading from "../ui/TriadeLoading";
 import { api } from "../services/api";
+import { getOrFetch } from "../cache/memoryCache";
+import { CACHE_KEYS } from "../cache/cacheKeys";
 
 const MAIN_BLUE = "#0E2A47";
 
@@ -43,15 +45,26 @@ export function NotificationsScreen() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     try {
-      setLoading(true);
+      if (!force) {
+        setLoading(true);
+      }
       setErrorMsg(null);
 
-      const res = await api.get("/notifications", { timeout: 30000 });
-      const payload = res.data ?? {};
-      const list = Array.isArray(payload?.notifications) ? payload.notifications : [];
+      const key = CACHE_KEYS.NOTIFICATIONS("me-v2");
+      const data = await getOrFetch(
+        key,
+        async () => {
+          const res = await api.get("/notifications", { timeout: 30000 });
+          return res.data ?? {};
+        },
+        force ? { force: true } : undefined
+      );
+
+      const list = Array.isArray(data?.notifications) ? data.notifications : [];
       const sortedList = sortNotificationsByDate(list);
       setNotifications(sortedList);
 
@@ -66,9 +79,21 @@ export function NotificationsScreen() {
       setNotifications([]);
       setErrorMsg("Não foi possível carregar notificações.");
     } finally {
-      setLoading(false);
+      if (!force) {
+        setLoading(false);
+      }
     }
   }, []);
+
+  // ✅ NOVO: pull-to-refresh
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await load(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [load]);
 
   // carrega 1x
   useEffect(() => {
@@ -94,7 +119,13 @@ export function NotificationsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right", "bottom"]}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />
+        }
+      >
         {/* ✅ título dentro da tela (sem header) */}
         <Text style={styles.pageTitle}>Notificações</Text>
 

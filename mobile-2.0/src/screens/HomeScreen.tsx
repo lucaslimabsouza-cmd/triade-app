@@ -295,6 +295,9 @@ export function HomeScreen({ navigation, onLogout }: Props) {
   );
   const [loadingFinancial, setLoadingFinancial] = useState(false);
 
+  // ✅ NOVO: pull-to-refresh
+  const [refreshing, setRefreshing] = useState(false);
+
   const pushRegisteredRef = useRef(false);
 
   const ADVISOR = {
@@ -543,6 +546,95 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     if (can) Linking.openURL(url);
   }
 
+  // ✅ NOVO: pull-to-refresh - força atualização de todos os dados
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      // Limpa cache e força atualização de todos os dados
+      const keyMe = CACHE_KEYS.ME;
+      const keyOps = CACHE_KEYS.OPERATIONS;
+      const keyNotifs = CACHE_KEYS.NOTIFICATIONS("me-v2");
+
+      // Força atualização de /me
+      const meData = await getOrFetch(
+        keyMe,
+        async () => {
+          const res = await api.get("/me", { timeout: 15000 });
+          return res.data ?? {};
+        },
+        { force: true }
+      );
+
+      const party = meData.party ?? {};
+      const fn =
+        String(party.firstName ?? meData.firstName ?? "").trim() ||
+        firstNameFromFullName(String(party.name ?? meData.fullName ?? "").trim());
+      setFirstName(fn);
+
+      // Força atualização de operations
+      const ops = await getOrFetch(
+        keyOps,
+        async () => {
+          const res = await api.get("/operations", { timeout: 30000 });
+          const data = (res.data ?? []) as Operation[];
+          return Array.isArray(data) ? data : [];
+        },
+        { force: true }
+      );
+      setOperations(ops);
+
+      // Força atualização de financial para todas as operações
+      if (ops.length > 0) {
+        const financialResults: Record<string, OperationFinancial | undefined> = {};
+        await Promise.all(
+          ops.slice(0, 6).map(async (op) => {
+            const id = String(op.id).trim();
+            if (!id) return;
+            const roiExpectedPercent = roiToPercent(op.roi);
+            const key = CACHE_KEYS.OP_FINANCIAL(id, roiExpectedPercent);
+            try {
+              const d = await getOrFetch(
+                key,
+                async () => {
+                  const finRes = await api.get(`/operation-financial/${id}`, {
+                    params: { roi_expected: roiExpectedPercent },
+                    timeout: 30000,
+                  });
+                  return finRes.data ?? {};
+                },
+                { force: true }
+              );
+              financialResults[id] = buildFinancialFromApi(d, roiExpectedPercent);
+            } catch {
+              financialResults[id] = undefined;
+            }
+          })
+        );
+        setFinancialById((prev) => ({ ...prev, ...financialResults }));
+      }
+
+      // Força atualização de notifications
+      const notifData = await getOrFetch(
+        keyNotifs,
+        async () => {
+          const res = await api.get("/notifications", { timeout: 30000 });
+          return res.data ?? {};
+        },
+        { force: true }
+      );
+      const list = Array.isArray(notifData?.notifications) ? notifData.notifications : [];
+      const sortedList = sortNotificationsByDate(list);
+      setNotifications(sortedList);
+
+      // Atualiza unread count
+      await fetchUnreadCount();
+    } catch (err) {
+      console.log("❌ [HomeScreen] refresh error:", err);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchUnreadCount]);
+
   // ✅ LOADING
   if (!isHomeReady) {
     return (
@@ -567,6 +659,8 @@ export function HomeScreen({ navigation, onLogout }: Props) {
       padding={16}
       contentTopOffset={0}
       headerUnreadCount={unreadCount}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
     >
       <View style={styles.header}>
         <Text style={styles.welcomeText}>Olá, {greetingName}</Text>

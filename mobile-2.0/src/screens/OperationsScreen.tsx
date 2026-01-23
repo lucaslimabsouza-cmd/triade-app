@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   ScrollView,
   FlatList,
   TouchableOpacity,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -72,6 +73,9 @@ export function OperationsScreen({ navigation }: Props) {
     Record<string, boolean>
   >({});
 
+  // ✅ NOVO: pull-to-refresh
+  const [refreshing, setRefreshing] = useState(false);
+
   useEffect(() => {
     let alive = true;
 
@@ -110,7 +114,7 @@ export function OperationsScreen({ navigation }: Props) {
             const roiExpectedPercent = roiToPercent(op.roi);
 
             const fin = await getOrFetch(
-              CACHE_KEYS.OP_FINANCIAL(id),
+              CACHE_KEYS.OP_FINANCIAL(id, roiExpectedPercent),
               async () => {
                 const res = await api.get(`/operation-financial/${id}`, {
                   params: { roi_expected: roiExpectedPercent },
@@ -202,6 +206,74 @@ export function OperationsScreen({ navigation }: Props) {
     return { activeOps: active, finishedOps: finished };
   }, [operations]);
 
+  // ✅ NOVO: pull-to-refresh - força atualização
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    setErrorMsg(null);
+    try {
+      // Força atualização de operations
+      const ops = await getOrFetch(
+        CACHE_KEYS.OPERATIONS,
+        async () => {
+          const res = await api.get("/operations", { timeout: 30000 });
+          const data = (res.data ?? []) as Operation[];
+          return Array.isArray(data) ? data : [];
+        },
+        { force: true }
+      );
+      setOperations(ops);
+
+      // Força atualização de financial para todas as operações
+      if (ops.length > 0) {
+        const roiToPercent = (roi: any) => {
+          const r = Number(roi ?? 0);
+          return r < 1 ? r * 100 : r;
+        };
+
+        const financialResults: Record<string, OperationFinancial | undefined> = {};
+        await Promise.all(
+          ops.map(async (op) => {
+            const id = String(op.id);
+            if (!id) return;
+
+            const roiExpectedPercent = roiToPercent(op.roi);
+            const key = CACHE_KEYS.OP_FINANCIAL(id, roiExpectedPercent);
+
+            try {
+              const fin = await getOrFetch(
+                key,
+                async () => {
+                  const res = await api.get(`/operation-financial/${id}`, {
+                    params: { roi_expected: roiExpectedPercent },
+                    timeout: 30000,
+                  });
+                  const d = res.data ?? {};
+                  return {
+                    amountInvested: Number(d.amountInvested ?? 0),
+                    expectedProfit: Number(d.expectedProfit ?? 0),
+                    realizedProfit: Number(d.realizedProfit ?? 0),
+                    realizedRoiPercent: Number(d.realizedRoiPercent ?? 0),
+                    roiExpectedPercent: Number(d.roiExpectedPercent ?? roiExpectedPercent ?? 0),
+                  };
+                },
+                { force: true }
+              );
+              financialResults[id] = fin;
+            } catch {
+              financialResults[id] = undefined;
+            }
+          })
+        );
+        setFinancialById(financialResults);
+      }
+    } catch (err: any) {
+      console.log("❌ [OperationsScreen] refresh error:", err?.message);
+      setErrorMsg("Não foi possível atualizar as operações.");
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
   function openDetails(op: Operation) {
     const roiRaw = Number(op.roi ?? 0);
     const roiPercentExpected = roiRaw < 1 ? roiRaw * 100 : roiRaw;
@@ -246,7 +318,12 @@ export function OperationsScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />
+        }
+      >
         <AppHeader title="" onBack={() => navigation.goBack()} />
 
         <Text style={styles.title}>Minhas operações</Text>

@@ -1,5 +1,5 @@
 import React from "react";
-import { ScrollView, StyleSheet, ViewStyle, View } from "react-native";
+import { ScrollView, StyleSheet, ViewStyle, View, RefreshControl } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import AppHeader from "../components/AppHeader"; // usa o AppHeader como você tem
@@ -17,6 +17,10 @@ type Props = {
 
   // ✅ NOVO: badge do AppHeader vem do Home (ou de qualquer tela)
   headerUnreadCount?: number;
+
+  // ✅ NOVO: pull-to-refresh
+  refreshing?: boolean;
+  onRefresh?: () => void | Promise<void>;
 };
 
 export function Screen({
@@ -28,6 +32,8 @@ export function Screen({
   contentStyle,
   scroll = true,
   headerUnreadCount = 0,
+  refreshing = false,
+  onRefresh,
 }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={["left", "right", "bottom"]}>
@@ -43,6 +49,11 @@ export function Screen({
           ]}
           keyboardShouldPersistTaps="handled"
           scrollIndicatorInsets={{ top: 0, bottom: 24 }}
+          refreshControl={
+            onRefresh ? (
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />
+            ) : undefined
+          }
         >
           {children}
         </ScrollView>
