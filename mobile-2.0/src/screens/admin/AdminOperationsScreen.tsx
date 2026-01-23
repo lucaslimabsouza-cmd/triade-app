@@ -104,7 +104,7 @@ export function AdminOperationsScreen({ navigation }: Props) {
           const fin = await getOrFetch(
             key,
             async () => {
-              const res = await api.get(`/operation-financial/${id}`, {
+              const res = await api.get(`/admin/operation-financial/${id}`, {
                 params: { roi_expected: roiExpectedPercent },
                 timeout: 30000,
               });

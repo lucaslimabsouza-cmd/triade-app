@@ -2,7 +2,7 @@
 // ✅ Lista todos os clientes com dados financeiros
 
 import React, { useEffect, useState, useCallback } from "react";
-import { View, Text, StyleSheet, FlatList, RefreshControl } from "react-native";
+import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Modal, ScrollView } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AdminStackParamList } from "../../navigation/types";
 import Screen from "../Screen";
@@ -31,6 +31,10 @@ export function AdminPartiesScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedParty, setSelectedParty] = useState<Party | null>(null);
+  const [operations, setOperations] = useState<string[]>([]);
+  const [loadingOperations, setLoadingOperations] = useState(false);
 
   const loadParties = useCallback(async (force = false) => {
     try {
@@ -64,6 +68,30 @@ export function AdminPartiesScreen({ navigation }: Props) {
     }
   }, [loadParties]);
 
+  const loadOperationsForParty = useCallback(async (party: Party) => {
+    try {
+      setLoadingOperations(true);
+      setSelectedParty(party);
+      setModalVisible(true);
+      setOperations([]);
+
+      const res = await api.get(`/admin/parties/${party.id}/operations`, { timeout: 30000 });
+      const data = res.data?.operations ?? [];
+      setOperations(Array.isArray(data) ? data : []);
+    } catch (err: any) {
+      console.log("❌ [AdminParties] error loading operations:", err?.message);
+      setOperations([]);
+    } finally {
+      setLoadingOperations(false);
+    }
+  }, []);
+
+  const closeModal = useCallback(() => {
+    setModalVisible(false);
+    setSelectedParty(null);
+    setOperations([]);
+  }, []);
+
   if (loading && parties.length === 0) {
     return (
       <Screen title="Todos os Clientes" scroll={false}>
@@ -93,7 +121,11 @@ export function AdminPartiesScreen({ navigation }: Props) {
             data={parties}
             keyExtractor={(item) => String(item.id)}
             renderItem={({ item }) => (
-              <View style={styles.partyCard}>
+              <TouchableOpacity
+                style={styles.partyCard}
+                onPress={() => loadOperationsForParty(item)}
+                activeOpacity={0.85}
+              >
                 <Text style={styles.partyName}>{item.name || "Sem nome"}</Text>
                 
                 {item.cpf_cnpj && (
@@ -111,7 +143,7 @@ export function AdminPartiesScreen({ navigation }: Props) {
                     <Text style={styles.financialValue}>{formatCurrency(item.lucroDistribuido)}</Text>
                   </View>
                 </View>
-              </View>
+              </TouchableOpacity>
             )}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />
@@ -120,6 +152,45 @@ export function AdminPartiesScreen({ navigation }: Props) {
           />
         )}
       </View>
+
+      {/* Modal com operações do cliente */}
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeModal}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                Operações de {selectedParty?.name || "Cliente"}
+              </Text>
+              <TouchableOpacity onPress={closeModal} activeOpacity={0.85} style={styles.modalCloseBtn}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </TouchableOpacity>
+            </View>
+
+            {loadingOperations ? (
+              <View style={styles.modalLoading}>
+                <TriadeLoading />
+              </View>
+            ) : operations.length === 0 ? (
+              <View style={styles.modalEmpty}>
+                <Text style={styles.modalEmptyText}>Nenhuma operação encontrada.</Text>
+              </View>
+            ) : (
+              <ScrollView style={styles.modalList} contentContainerStyle={styles.modalListContent}>
+                {operations.map((opName, index) => (
+                  <View key={index} style={styles.operationItem}>
+                    <Text style={styles.operationName}>{opName}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -129,6 +200,8 @@ export default AdminPartiesScreen;
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
   errorText: {
     color: "#FFB4B4",
@@ -185,5 +258,76 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: "#FFFFFF",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: "#14395E",
+    borderRadius: 16,
+    width: "100%",
+    maxWidth: 400,
+    maxHeight: "80%",
+    overflow: "hidden",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2F80ED44",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    flex: 1,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalCloseText: {
+    fontSize: 28,
+    color: "#FFFFFF",
+    lineHeight: 28,
+  },
+  modalLoading: {
+    padding: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalEmpty: {
+    padding: 40,
+    alignItems: "center",
+  },
+  modalEmptyText: {
+    color: "#C3C9D6",
+    fontSize: 14,
+  },
+  modalList: {
+    flex: 1,
+  },
+  modalListContent: {
+    padding: 16,
+    paddingBottom: 20,
+  },
+  operationItem: {
+    backgroundColor: "#0E2A47",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+  },
+  operationName: {
+    fontSize: 14,
+    color: "#FFFFFF",
+    fontWeight: "500",
   },
 });

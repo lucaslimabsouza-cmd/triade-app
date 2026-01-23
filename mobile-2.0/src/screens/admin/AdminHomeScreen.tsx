@@ -89,8 +89,8 @@ export function AdminHomeScreen({ navigation, onLogout }: Props) {
           </View>
         </View>
 
-        {/* Estatísticas - Segunda linha (2 cards) */}
-        <View style={styles.statsRow}>
+        {/* Estatísticas - Segunda linha (2 cards centralizados) */}
+        <View style={styles.statsRowCentered}>
           <View style={[styles.statCard, styles.statCardWide]}>
             <Text style={styles.statValue}>{formatCurrency(stats.valorTotalInvestido)}</Text>
             <Text style={styles.statLabel}>Valor total investido</Text>
@@ -122,15 +122,6 @@ export function AdminHomeScreen({ navigation, onLogout }: Props) {
             <Text style={styles.actionTitle}>Ver Todos os Clientes</Text>
             <Text style={styles.actionSubtitle}>Lista completa de clientes cadastrados</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionCard}
-            onPress={() => navigation.navigate("AdminMovements")}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.actionTitle}>Ver Movimentações</Text>
-            <Text style={styles.actionSubtitle}>Todas as movimentações financeiras</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
     </Screen>
@@ -158,6 +149,12 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 12,
   },
+  statsRowCentered: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 12,
+    justifyContent: "center",
+  },
   statCard: {
     flex: 1,
     backgroundColor: "#14395E",
@@ -167,6 +164,7 @@ const styles = StyleSheet.create({
   },
   statCardWide: {
     flex: 1,
+    maxWidth: "48%",
   },
   statValue: {
     fontSize: 20,
