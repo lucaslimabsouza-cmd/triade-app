@@ -9,6 +9,9 @@ import { logger } from "../lib/logger";
 
 const router = Router();
 
+// Lock simples para evitar execuções simultâneas
+let syncAllLock = false;
+
 function requireAdmin(req: any, res: any, next: any) {
   const got = String(req.headers["x-admin-key"] || "");
   const expected = String(process.env.ADMIN_API_KEY || "");
@@ -18,12 +21,21 @@ function requireAdmin(req: any, res: any, next: any) {
 }
 
 router.post("/cron/sync-all", requireAdmin, async (_req, res) => {
+  // Verifica se já está em execução
+  if (syncAllLock) {
+    logger.warn("[cron/sync-all] Já está em execução, ignorando requisição");
+    return res.status(429).json({ ok: false, error: "Sincronização já em andamento" });
+  }
+
+  syncAllLock = true;
   try {
     const result = await syncAll();
     return res.json({ ok: true, ...result });
   } catch (e: any) {
     logger.error("[cron/sync-all] error", e);
     return res.status(500).json({ ok: false, error: e?.message || "Erro interno" });
+  } finally {
+    syncAllLock = false;
   }
 });
 

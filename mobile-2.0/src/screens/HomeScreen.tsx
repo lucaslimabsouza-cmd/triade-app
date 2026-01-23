@@ -361,58 +361,22 @@ export function HomeScreen({ navigation, onLogout }: Props) {
     }, [fetchUnreadCount, fetchNotifications])
   );
 
-  // /me
+  // /me e /operations em paralelo
   useEffect(() => {
     let alive = true;
 
-    async function loadMe() {
+    async function loadData() {
       try {
+        // Prefill cache
         const cached = cacheGet<any>(CACHE_KEYS.ME);
         if (cached) {
           const party = cached.party ?? {};
           const fn =
             String(party.firstName ?? cached.firstName ?? "").trim() ||
             firstNameFromFullName(String(party.name ?? cached.fullName ?? "").trim());
-
           if (alive) setFirstName(fn);
         }
 
-        const d = await getOrFetch(CACHE_KEYS.ME, async () => {
-          const res = await api.get("/me", { timeout: 15000 });
-          return res.data ?? {};
-        });
-
-        if (!alive) return;
-
-        const party = d.party ?? {};
-        const fn =
-          String(party.firstName ?? d.firstName ?? "").trim() ||
-          firstNameFromFullName(String(party.name ?? d.fullName ?? "").trim());
-
-        setFirstName(fn);
-
-        if (!pushRegisteredRef.current) {
-          pushRegisteredRef.current = true;
-          registerForPushOnce();
-        }
-      } catch {
-        if (!alive) return;
-        setFirstName("");
-      }
-    }
-
-    loadMe();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // /operations
-  useEffect(() => {
-    let alive = true;
-
-    async function loadOperations() {
-      try {
         const cachedOps = cacheGet<Operation[]>(CACHE_KEYS.OPERATIONS);
         if (cachedOps && Array.isArray(cachedOps)) {
           if (!alive) return;
@@ -423,16 +387,36 @@ export function HomeScreen({ navigation, onLogout }: Props) {
           setLoading(true);
         }
 
-        const ops = await getOrFetch(CACHE_KEYS.OPERATIONS, async () => {
-          const res = await api.get("/operations", { timeout: 30000 });
-          const data = (res.data ?? []) as Operation[];
-          return Array.isArray(data) ? data : [];
-        });
+        // Carrega ambos em paralelo
+        const [meData, ops] = await Promise.all([
+          getOrFetch(CACHE_KEYS.ME, async () => {
+            const res = await api.get("/me", { timeout: 15000 });
+            return res.data ?? {};
+          }),
+          getOrFetch(CACHE_KEYS.OPERATIONS, async () => {
+            const res = await api.get("/operations", { timeout: 30000 });
+            const data = (res.data ?? []) as Operation[];
+            return Array.isArray(data) ? data : [];
+          }),
+        ]);
 
         if (!alive) return;
+
+        const party = meData.party ?? {};
+        const fn =
+          String(party.firstName ?? meData.firstName ?? "").trim() ||
+          firstNameFromFullName(String(party.name ?? meData.fullName ?? "").trim());
+        setFirstName(fn);
+
         setOperations(ops);
-      } catch {
+
+        if (!pushRegisteredRef.current) {
+          pushRegisteredRef.current = true;
+          registerForPushOnce();
+        }
+      } catch (err) {
         if (!alive) return;
+        setFirstName("");
         setOperations((prev) => (prev?.length ? prev : []));
       } finally {
         if (!alive) return;
@@ -440,7 +424,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
       }
     }
 
-    loadOperations();
+    loadData();
     return () => {
       alive = false;
     };
@@ -475,14 +459,12 @@ export function HomeScreen({ navigation, onLogout }: Props) {
         setLoadingFinancial(true);
 
         const results: Record<string, OperationFinancial | undefined> = {};
-        const limit = 6;
-        let idx = 0;
 
-        async function worker() {
-          while (idx < operations.length) {
-            const op = operations[idx++];
+        // Carrega TODAS as operações em paralelo
+        await Promise.all(
+          operations.map(async (op) => {
             const id = String(op.id).trim();
-            if (!id) continue;
+            if (!id) return;
 
             const roiExpectedPercent = roiToPercent(op.roi);
             const key = CACHE_KEYS.OP_FINANCIAL(id, roiExpectedPercent);
@@ -500,11 +482,7 @@ export function HomeScreen({ navigation, onLogout }: Props) {
             } catch {
               results[id] = undefined;
             }
-          }
-        }
-
-        await Promise.all(
-          Array.from({ length: Math.min(limit, operations.length) }, () => worker())
+          })
         );
 
         if (!alive) return;
