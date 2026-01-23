@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { syncAll } from "../services/cron/syncAll";
+import { syncOmieMfMovements } from "../services/cron/syncOmieMfMovements";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -16,7 +18,20 @@ router.post("/cron/sync-all", requireAdmin, async (_req, res) => {
     const result = await syncAll();
     return res.json({ ok: true, ...result });
   } catch (e: any) {
-    console.log("[cron/sync-all] error:", e?.message || e);
+    logger.error("[cron/sync-all] error", e);
+    return res.status(500).json({ ok: false, error: e?.message || "Erro interno" });
+  }
+});
+
+// ✅ Endpoint de teste específico para omie_mf_movements
+router.post("/cron/test-omie-mf-movements", requireAdmin, async (_req, res) => {
+  try {
+    logger.info("[cron/test-omie-mf-movements] Iniciando sincronização");
+    const result = await syncOmieMfMovements();
+    logger.info("[cron/test-omie-mf-movements] Sincronização concluída", result);
+    return res.json({ ok: true, ...result });
+  } catch (e: any) {
+    logger.error("[cron/test-omie-mf-movements] error", e);
     return res.status(500).json({ ok: false, error: e?.message || "Erro interno" });
   }
 });

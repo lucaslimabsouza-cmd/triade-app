@@ -73,6 +73,15 @@ type NotificationItem = {
   tipo?: string | null;
 };
 
+// Ordena notificações por datahora (mais recente primeiro)
+function sortNotificationsByDate(notifications: NotificationItem[]): NotificationItem[] {
+  return [...notifications].sort((a, b) => {
+    const dateA = a.datahora ? new Date(a.datahora).getTime() : 0;
+    const dateB = b.datahora ? new Date(b.datahora).getTime() : 0;
+    return dateB - dateA; // Ordem decrescente (mais recente primeiro)
+  });
+}
+
 type Props = NativeStackScreenProps<AppStackParamList, "Home"> & {
   onLogout: () => Promise<void>;
 };
@@ -321,7 +330,8 @@ export function HomeScreen({ navigation, onLogout }: Props) {
       const cached = cacheGet<any>(key);
 
       if (cached?.notifications && Array.isArray(cached.notifications)) {
-        setNotifications(cached.notifications);
+        const sortedCached = sortNotificationsByDate(cached.notifications);
+        setNotifications(sortedCached);
         setLoadingNotifs(false);
       }
 
@@ -331,7 +341,8 @@ export function HomeScreen({ navigation, onLogout }: Props) {
       });
 
       const list = Array.isArray(data?.notifications) ? data.notifications : [];
-      setNotifications(list);
+      const sortedList = sortNotificationsByDate(list);
+      setNotifications(sortedList);
     } catch {
       setNotifications((prev) => (prev?.length ? prev : []));
     } finally {

@@ -30,6 +30,15 @@ function formatDateBR(iso?: string | null) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
+// Ordena notificações por datahora (mais recente primeiro)
+function sortNotificationsByDate(notifications: NotificationItem[]): NotificationItem[] {
+  return [...notifications].sort((a, b) => {
+    const dateA = a.datahora ? new Date(a.datahora).getTime() : 0;
+    const dateB = b.datahora ? new Date(b.datahora).getTime() : 0;
+    return dateB - dateA; // Ordem decrescente (mais recente primeiro)
+  });
+}
+
 export function NotificationsScreen() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,8 +52,8 @@ export function NotificationsScreen() {
       const res = await api.get("/notifications", { timeout: 30000 });
       const payload = res.data ?? {};
       const list = Array.isArray(payload?.notifications) ? payload.notifications : [];
-
-      setNotifications(list);
+      const sortedList = sortNotificationsByDate(list);
+      setNotifications(sortedList);
 
       // ✅ Considera como "lido" quando a pessoa VISITA a página
       // (se a rota existir no backend)
